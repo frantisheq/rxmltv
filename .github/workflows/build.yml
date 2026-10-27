@@ -24,9 +24,9 @@ jobs:
           # Linux is built against musl: a fully static binary that runs on any distribution.
           # The ARM64 and RISC-V builds are cross-compiled with zig as the linker; they can't run
           # on the x86-64 runner, so only the native build runs the tests.
-          - { os: ubuntu-latest,  rid: linux-x64,     target: x86_64-unknown-linux-musl,     binary: rxmltv,     zig: false, test: true }
-          - { os: ubuntu-latest,  rid: linux-arm64,   target: aarch64-unknown-linux-musl,    binary: rxmltv,     zig: true,  test: false }
-          - { os: ubuntu-latest,  rid: linux-riscv64, target: riscv64gc-unknown-linux-musl,  binary: rxmltv,     zig: true,  test: false }
+          - { os: ubuntu-24.04,  rid: linux-x64,     target: x86_64-unknown-linux-musl,     binary: rxmltv,     zig: false, test: true }
+          - { os: ubuntu-24.04,  rid: linux-arm64,   target: aarch64-unknown-linux-musl,    binary: rxmltv,     zig: true,  test: false }
+          - { os: ubuntu-24.04,  rid: linux-riscv64, target: riscv64gc-unknown-linux-musl,  binary: rxmltv,     zig: true,  test: false }
           - { os: windows-latest, rid: win-x64,       target: x86_64-pc-windows-msvc,        binary: rxmltv.exe, zig: false, test: true }
           - { os: windows-latest, rid: win-arm64,     target: aarch64-pc-windows-msvc,       binary: rxmltv.exe, zig: false, test: false }
           # macos-latest is an Apple Silicon runner; the x86-64 build is cross-compiled on it.
@@ -34,7 +34,7 @@ jobs:
           - { os: macos-latest,   rid: macos-x64,     target: x86_64-apple-darwin,           binary: rxmltv,     zig: false, test: false }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -47,9 +47,10 @@ jobs:
         with:
           tool: cargo-zigbuild
 
+      # zig comes from PyPI: cargo-zigbuild finds it as "python3 -m ziglang".
       - name: Install zig
         if: matrix.zig
-        uses: mlugg/setup-zig@v1
+        run: python3 -m pip install --break-system-packages ziglang
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -68,7 +69,7 @@ jobs:
         run: cargo zigbuild --release --target ${{ matrix.target }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rxmltv-${{ matrix.rid }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary }}
@@ -78,7 +79,7 @@ jobs:
   # A binary built on FreeBSD 14 runs on 14.x and newer. The ARM64 VM is emulated and therefore slow.
   freebsd:
     name: build (freebsd-${{ matrix.rid }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -87,7 +88,7 @@ jobs:
           - { rid: x64,   arch: x86_64,  test: true }
           - { rid: arm64, arch: aarch64, test: false }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build in FreeBSD
         uses: vmactions/freebsd-vm@v1
@@ -102,7 +103,7 @@ jobs:
             cargo build --release
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: rxmltv-freebsd-${{ matrix.rid }}
           path: target/release/rxmltv
@@ -113,12 +114,12 @@ jobs:
     name: release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, freebsd]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts   # one sub-folder per artifact name, e.g. artifacts/rxmltv-linux-x64
 
