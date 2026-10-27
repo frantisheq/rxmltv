@@ -44,6 +44,9 @@ rxmltv [options]
 | `--clean-cache` | Delete cached files older than today, expired "no data" markers and leftover temp files |
 | `--concurrency <n>` | Parallel downloads (default 4) |
 | `--groups <a,b,c>` | Only these channel groups, by name or code, e.g. `"České,Slovenské"` or `cz,sk`. Default: all groups |
+| `--channels <a,b,c>` | Pick individual channels by XMLTV id, e.g. `cz-ct1-2,sk-markiza-7` (see `--list-channels`). Combined with `--groups`, you get both selections |
+| `--channels-file <file>` | Same, one id per line; lines starting with `#` are ignored and only the first word of a line is used, so you can paste lines from `--list-channels` as they are. Can be repeated |
+| `--list-channels` | Print every channel (XMLTV id and name) so you know what to put in `--channels`, then exit |
 | `--list-groups` | Print the groups the server offers with channel counts, then exit |
 | `--keep-title-numbers` | Keep `(3)`, `(2/6)` and roman season numbers in the title. Default: removed and written as `<episode-num>` |
 | `--keep-empty-channels` | Also write channels that have no programmes |
@@ -64,6 +67,24 @@ rxmltv --groups cz,sk --output /var/www/epg/guide.xml.gz
 
 # Tomorrow's guide only, tidy the cache first
 rxmltv --days 2 --clean-cache
+```
+
+Choose individual channels by their XMLTV id (the `id` used in the output; ignoring case):
+
+```sh
+rxmltv --list-channels                       # prints "cz-ct1-2  ČT1" and so on
+rxmltv --channels cz-ct1-2,cz-nova-5,sk-markiza-7
+rxmltv --groups sk --channels cz-nova-5      # all Slovak channels plus Nova
+rxmltv --channels-file my-channels.txt
+```
+
+`my-channels.txt` (pasting lines from `--list-channels` works, the name after the id is ignored):
+
+```
+# one XMLTV id per line
+cz-ct1-2
+cz-nova-5     Nova
+sk-markiza-7
 ```
 
 Run it once or twice a day. For example with cron:

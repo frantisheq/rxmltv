@@ -33,7 +33,11 @@ const USAGE: &str = r#"Usage: rxmltv [options]
   --clean-cache       Delete cached files older than today
   --concurrency <n>   Parallel downloads (default 4)
   --groups <a,b,c>    Only these channel groups, by name or code, e.g. "České,Slovenské" or "cz,sk" (default: all groups)
+  --channels <a,b,c>  Pick individual channels by their XMLTV id, e.g. "cz-ct1-2,sk-markiza-7"
+                      (see --list-channels). Combined with --groups, the result is both selections together
+  --channels-file <f> Same as --channels, one id per line ("#" starts a comment, only the first word of a line is used)
   --list-groups       Print the groups the server offers, with channel counts, and exit
+  --list-channels     Print every channel (XMLTV id and name) for use with --channels, and exit
   --keep-title-numbers   Leave "(3)", "(2/6)" and roman season numbers in the title
                          (default: removed and written as <episode-num> instead)
   --keep-empty-channels  Also write channels that have no programmes
@@ -49,7 +53,9 @@ pub struct Options {
     pub cache_dir: String,
     pub concurrency: usize,
     pub groups: Option<Vec<String>>,
+    pub channels: Vec<String>,
     pub list_groups: bool,
+    pub list_channels: bool,
     pub keep_title_numbers: bool,
     pub keep_empty_channels: bool,
     pub no_images: bool,
@@ -166,7 +172,9 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
         cache_dir: "data/cache/".to_string(),
         concurrency: 4,
         groups: None,
+        channels: Vec::new(),
         list_groups: false,
+        list_channels: false,
         keep_title_numbers: false,
         keep_empty_channels: false,
         no_images: false,
@@ -190,6 +198,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "-h" | "--help" => return Ok(None),
             "--clean-cache" => o.clean_cache = true,
             "--list-groups" => o.list_groups = true,
+            "--list-channels" => o.list_channels = true,
             "--keep-title-numbers" => o.keep_title_numbers = true,
             "--keep-empty-channels" => o.keep_empty_channels = true,
             "--no-images" => o.no_images = true,
@@ -206,6 +215,22 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
                     return Err("--groups needs at least one name.".to_string());
                 }
                 o.groups = Some(groups);
+            }
+            "--channels" => {
+                let v = take_value(name, inline, args, &mut i)?;
+                o.channels.extend(v.split(',').map(str::trim).filter(|c| !c.is_empty()).map(String::from));
+            }
+            "--channels-file" => {
+                let path = take_value(name, inline, args, &mut i)?;
+                let text = fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))?;
+                o.channels.extend(
+                    text.trim_start_matches('\u{feff}')
+                        .lines()
+                        .map(str::trim)
+                        .filter(|l| !l.starts_with('#'))
+                        .filter_map(|l| l.split_whitespace().next())
+                        .map(String::from),
+                );
             }
             "--days" => o.days = parse_positive(name, &take_value(name, inline, args, &mut i)?)?,
             "--concurrency" => {
@@ -247,29 +272,51 @@ fn is_safe_id(id: &str) -> bool {
     !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-fn parse_channels(raw: &[RawChannel], groups: Option<&[String]>) -> Vec<Arc<Channel>> {
-    // None = no filter: every group the server offers is included.
-    let wanted: Option<HashSet<String>> = groups.map(|g| g.iter().map(|x| normalize(x)).collect());
+/// Which channels to produce: everything when no filter is given, otherwise the channels of the
+/// requested groups plus the individually requested ones (by XMLTV id, ignoring case).
+fn parse_channels(raw: &[RawChannel], groups: Option<&[String]>, channels: &[String]) -> Vec<Arc<Channel>> {
+    let wanted_groups: Option<HashSet<String>> = groups.map(|g| g.iter().map(|x| normalize(x)).collect());
+    let wanted_ids: HashSet<String> = channels.iter().map(|c| c.trim().to_lowercase()).collect();
+    let filtering = wanted_groups.is_some() || !wanted_ids.is_empty();
+    let mut found: HashSet<String> = HashSet::new();
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut items: Vec<(Channel, String, String)> = Vec::new(); // (channel, code, sort key)
 
     for r in raw {
-        let code = group_code(Some(&r.group));
-        if let Some(w) = &wanted {
-            if !(w.contains(&normalize(&r.group)) || w.contains(&code)) {
-                continue;
-            }
-        }
         let (Some(id), Some(name)) = (&r.id, &r.name) else { continue };
         if !is_safe_id(id) {
             continue;
         }
+        let code = group_code(Some(&r.group));
+        let channel = Channel::new(id.clone(), name.clone(), r.logo.clone(), code.clone());
+
+        if filtering {
+            let group_n = normalize(&r.group);
+            let in_group = wanted_groups
+                .as_ref()
+                .is_some_and(|w| w.contains(&group_n) || w.contains(&code));
+
+            let xml_id = channel.xml_id.to_lowercase();
+            let picked = wanted_ids.contains(&xml_id);
+            if picked {
+                found.insert(xml_id);
+            }
+            if !(in_group || picked) {
+                continue;
+            }
+        }
+
         if !seen.insert(id.clone()) {
             continue; // a channel listed in two groups must only appear once in the XMLTV
         }
-        let sort_key = unidecode(name);
-        items.push((Channel::new(id.clone(), name.clone(), r.logo.clone(), code.clone()), code, sort_key));
+        items.push((channel, code, unidecode(name)));
+    }
+
+    for wanted in channels {
+        if !found.contains(&wanted.trim().to_lowercase()) {
+            eprintln!("Warning: channel \"{wanted}\" not found (see --list-channels).");
+        }
     }
 
     // Countries alphabetically by code, then channels alphabetically ignoring diacritics and case.
@@ -301,6 +348,15 @@ fn print_groups(raw: &[RawChannel]) {
     for (name, count) in &groups {
         let shown = if name.is_empty() { "(none)" } else { name.as_str() };
         println!("{:>5}  {}  [{}]", count, shown, group_code(Some(name)));
+    }
+}
+
+/// The XMLTV id (as written to the output) and the name of every channel, in output order.
+fn print_channels(raw: &[RawChannel]) {
+    let channels = parse_channels(raw, None, &[]);
+    let width = channels.iter().map(|c| c.xml_id.chars().count()).max().unwrap_or(0);
+    for c in &channels {
+        println!("{:<width$}  {}", c.xml_id, c.name);
     }
 }
 
@@ -499,9 +555,14 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
         return Ok(0);
     }
 
+    if opts.list_channels {
+        print_channels(&raw);
+        return Ok(0);
+    }
+
     warn_about_unknown_groups(&raw, opts.groups.as_deref());
 
-    let channels = parse_channels(&raw, opts.groups.as_deref());
+    let channels = parse_channels(&raw, opts.groups.as_deref(), &opts.channels);
     if channels.is_empty() {
         eprintln!("No channels matched. Run with --list-groups to see the available groups.");
         return Ok(1);
@@ -626,6 +687,80 @@ mod tests {
         assert!(parse_args(&args(&["--days"])).is_err());
         assert!(parse_args(&args(&["--nope"])).is_err());
         assert!(parse_args(&args(&["--help"])).unwrap().is_none());
+    }
+
+    fn raw_channel(id: &str, name: &str, group: &str) -> RawChannel {
+        RawChannel {
+            id: Some(id.to_string()),
+            name: Some(name.to_string()),
+            logo: None,
+            group: group.to_string(),
+        }
+    }
+
+    // XMLTV ids: cz-ct1-1, cz-nova-2, sk-markiza-3, cz-prima-zoom-4
+    fn sample() -> Vec<RawChannel> {
+        vec![
+            raw_channel("1", "ČT1", "České"),
+            raw_channel("2", "Nova", "České"),
+            raw_channel("3", "Markíza", "Slovenské"),
+            raw_channel("4", "Prima Zoom", "České"),
+        ]
+    }
+
+    fn ids(list: &[Arc<Channel>]) -> Vec<&str> {
+        list.iter().map(|c| c.id.as_str()).collect()
+    }
+
+    fn list(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_filter_selects_everything() {
+        assert_eq!(ids(&parse_channels(&sample(), None, &[])), vec!["1", "2", "4", "3"]);
+    }
+
+    #[test]
+    fn channels_are_picked_by_xmltv_id() {
+        assert_eq!(ids(&parse_channels(&sample(), None, &list(&["cz-nova-2"]))), vec!["2"]);
+        assert_eq!(
+            ids(&parse_channels(&sample(), None, &list(&["sk-markiza-3", "cz-ct1-1"]))),
+            vec!["1", "3"]
+        );
+    }
+
+    #[test]
+    fn xmltv_ids_ignore_case() {
+        assert_eq!(ids(&parse_channels(&sample(), None, &list(&["SK-Markiza-3"]))), vec!["3"]);
+    }
+
+    #[test]
+    fn names_and_plain_ids_do_not_match() {
+        assert!(parse_channels(&sample(), None, &list(&["Nova"])).is_empty());
+        assert!(parse_channels(&sample(), None, &list(&["2"])).is_empty());
+    }
+
+    #[test]
+    fn groups_and_channels_are_combined() {
+        let groups = list(&["sk"]);
+        let chosen = parse_channels(&sample(), Some(&groups), &list(&["cz-nova-2"]));
+        assert_eq!(ids(&chosen), vec!["2", "3"]);
+    }
+
+    #[test]
+    fn channels_option_is_parsed() {
+        let o = parse_args(&args(&["--channels", "cz-nova-2, sk-markiza-3"])).unwrap().unwrap();
+        assert_eq!(o.channels, vec!["cz-nova-2".to_string(), "sk-markiza-3".to_string()]);
+    }
+
+    #[test]
+    fn channels_file_takes_the_first_word_of_each_line() {
+        let path = std::env::temp_dir().join(format!("rxmltv-test-{}.txt", std::process::id()));
+        fs::write(&path, "# my channels\ncz-nova-2   Nova\n\n  sk-markiza-3\n").unwrap();
+        let o = parse_args(&args(&["--channels-file", path.to_str().unwrap()])).unwrap().unwrap();
+        let _ = fs::remove_file(&path);
+        assert_eq!(o.channels, vec!["cz-nova-2".to_string(), "sk-markiza-3".to_string()]);
     }
 
     #[test]
