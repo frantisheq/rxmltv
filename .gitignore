@@ -1,0 +1,15 @@
+# Rust
+/target
+
+# Generator output and cache
+/data/
+/xmltv.xml
+*.xmltv
+*.xmltv.gz
+*.tmp
+*.miss
+
+# Editors
+.idea/
+.vscode/
+.vs/
