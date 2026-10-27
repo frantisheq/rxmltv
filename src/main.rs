@@ -26,7 +26,7 @@ use crate::util::{child, child_value, get_numbers, html_decode, is_el, key, valu
 
 type BoxError = Box<dyn Error + Send + Sync>;
 
-const USAGE: &str = r#"Usage: rxmltv [options]
+const USAGE: &str = r##"Usage: rxmltv [options]
   --days <n>          Number of days to download (default 7)
   --output <file>     Output XMLTV file (default xmltv.xml; a .gz name is written compressed)
   --cache-dir <dir>   Cache folder (default data/cache/)
@@ -43,7 +43,7 @@ const USAGE: &str = r#"Usage: rxmltv [options]
   --keep-empty-channels  Also write channels that have no programmes
   --no-images         Don't write poster <icon> elements
   --retry-missing     Ask the server again for items it had no data for (otherwise skipped for 12 h)
-  -h, --help          Show this help"#;
+  -h, --help          Show this help"##;
 
 #[derive(Debug, Clone)]
 pub struct Options {
