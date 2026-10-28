@@ -38,6 +38,9 @@ const USAGE: &str = r##"Usage: rxmltv [options]
                       Combined with --groups, the result is both selections together
   --channels-file <f> Same as --channels, one entry per line ("#" starts a comment; after the id, anything
                       except "=newid" is ignored, so lines from --list-channels can be pasted as they are)
+  --strip-hd-tv       Remove the separate words "HD" and "TV" from channel names and therefore from the XMLTV ids
+                      ("Nova HD" -> "Nova", "TV Barrandov" -> "Barrandov"). Ids given to --channels must then
+                      be the stripped ones, as shown by --list-channels --strip-hd-tv
   --list-groups       Print the groups the server offers, with channel counts, and exit
   --list-channels     Print every channel (XMLTV id and name) for use with --channels, and exit
   --keep-title-numbers   Leave "(3)", "(2/6)" and roman season numbers in the title
@@ -62,6 +65,7 @@ pub struct Options {
     pub keep_empty_channels: bool,
     pub no_images: bool,
     pub retry_missing: bool,
+    pub strip_hd_tv: bool,
 }
 
 /// A channel asked for with --channels / --channels-file: its XMLTV id and optionally a new id to write instead.
@@ -210,6 +214,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
         keep_empty_channels: false,
         no_images: false,
         retry_missing: false,
+        strip_hd_tv: false,
     };
 
     let mut i = 0;
@@ -234,6 +239,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--keep-empty-channels" => o.keep_empty_channels = true,
             "--no-images" => o.no_images = true,
             "--retry-missing" => o.retry_missing = true,
+            "--strip-hd-tv" => o.strip_hd_tv = true,
             "--groups" => {
                 let v = take_value(name, inline, args, &mut i)?;
                 let groups: Vec<String> = v
@@ -298,6 +304,31 @@ fn parse_channel_list(root: Node) -> Vec<RawChannel> {
             group: child_value(a, "p").unwrap_or_default().trim().to_string(),
         })
         .collect()
+}
+
+/// Removes the words "HD" and "TV" (any case) when they stand on their own, i.e. have a space before or after
+/// them. A name that would become empty is left as it is.
+fn strip_hd_tv(name: &str) -> String {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    let kept: Vec<&str> = words
+        .iter()
+        .copied()
+        .filter(|w| !w.eq_ignore_ascii_case("hd") && !w.eq_ignore_ascii_case("tv"))
+        .collect();
+
+    if kept.is_empty() || kept.len() == words.len() {
+        name.to_string()
+    } else {
+        kept.join(" ")
+    }
+}
+
+fn strip_names(raw: &mut [RawChannel]) {
+    for r in raw {
+        if let Some(name) = &r.name {
+            r.name = Some(strip_hd_tv(name));
+        }
+    }
 }
 
 // Channel ids become part of cache file names, so only accept safe ones.
@@ -584,10 +615,14 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
 
     let fetcher = Arc::new(Fetcher::new(&cache_dir, opts.concurrency, opts.retry_missing)?);
 
-    let Some(raw) = fetcher.get("v5-tv.php?locale=cz", "channels.xml", false, parse_channel_list).await else {
+    let Some(mut raw) = fetcher.get("v5-tv.php?locale=cz", "channels.xml", false, parse_channel_list).await else {
         eprintln!("Could not load the channel list.");
         return Ok(1);
     };
+
+    if opts.strip_hd_tv {
+        strip_names(&mut raw); // names, and so the XMLTV ids built from them, lose "HD" and "TV"
+    }
 
     if opts.list_groups {
         print_groups(&raw);
@@ -798,6 +833,29 @@ mod tests {
         let groups = list(&["sk"]);
         let chosen = parse_channels(&sample(), Some(&groups), &requests(&["cz-nova-2"]));
         assert_eq!(ids(&chosen), vec!["2", "3"]);
+    }
+
+    #[test]
+    fn hd_and_tv_are_removed_only_as_separate_words() {
+        assert_eq!(strip_hd_tv("Nova HD"), "Nova");
+        assert_eq!(strip_hd_tv("TV Barrandov"), "Barrandov");
+        assert_eq!(strip_hd_tv("Prima TV HD"), "Prima");
+        assert_eq!(strip_hd_tv("hd Nova  tv"), "Nova");
+        assert_eq!(strip_hd_tv("ČT1 HD"), "ČT1");
+        assert_eq!(strip_hd_tv("HDTV"), "HDTV");
+        assert_eq!(strip_hd_tv("Nova HD2"), "Nova HD2");
+        assert_eq!(strip_hd_tv("Nova  Cinema"), "Nova  Cinema"); // nothing to remove: untouched
+        assert_eq!(strip_hd_tv("TV"), "TV"); // would be empty: untouched
+    }
+
+    #[test]
+    fn stripped_names_give_stripped_xmltv_ids() {
+        let mut raw = vec![raw_channel("2", "Nova HD", "České"), raw_channel("5", "TV Barrandov", "České")];
+        strip_names(&mut raw);
+        let chosen = parse_channels(&raw, None, &requests(&["cz-barrandov-5"]));
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0].name, "Barrandov");
+        assert_eq!(parse_channels(&raw, None, &[])[1].xml_id, "cz-nova-2");
     }
 
     #[test]

@@ -47,6 +47,7 @@ rxmltv [options]
 | `--channels <a,b,c>` | Pick individual channels by XMLTV id, e.g. `cz-ct1-2,sk-markiza-7` (see `--list-channels`). `id=newid` writes the channel under a different XMLTV id, e.g. `cz-ct1-2=ct1.cz`. Combined with `--groups`, you get both selections |
 | `--channels-file <file>` | Same, one entry per line; lines starting with `#` are ignored, and after the id anything except `=newid` is ignored, so you can paste lines from `--list-channels` as they are. Can be repeated |
 | `--list-channels` | Print every channel (XMLTV id and name) so you know what to put in `--channels`, then exit |
+| `--strip-hd-tv` | Remove the separate words `HD` and `TV` from channel names and from the XMLTV ids built from them: `Nova HD` becomes `Nova`, `TV Barrandov` becomes `Barrandov`. Words that are part of a longer word (`HDTV`) are left alone. Ids given to `--channels` must then be the stripped ones, so use the same flag with `--list-channels` |
 | `--list-groups` | Print the groups the server offers with channel counts, then exit |
 | `--keep-title-numbers` | Keep `(3)`, `(2/6)` and roman season numbers in the title. Default: removed and written as `<episode-num>` |
 | `--keep-empty-channels` | Also write channels that have no programmes |
@@ -98,6 +99,12 @@ Run it once or twice a day. For example with cron:
 ```
 30 4 * * * /usr/local/bin/rxmltv --groups cz,sk --clean-cache --output /var/www/epg/guide.xml.gz
 ```
+
+> **Note:** the first run can be slow. Every programme has its own detail file, so a full download of all channels
+> means tens of thousands of requests, and the cache starts empty. Later runs only fetch what is new and are much
+> faster, as long as you keep the same `--cache-dir`. To speed up the first run, limit it with `--groups` or
+> `--channels`, use fewer `--days`, or raise `--concurrency` a little (be considerate to the server). It is safe to
+> interrupt with Ctrl+C and start again: files already downloaded are kept.
 
 ### Group codes
 
