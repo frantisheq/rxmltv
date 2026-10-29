@@ -11,7 +11,7 @@ use ratatui::Frame;
 use tokio::runtime::Handle;
 
 use super::input::Input;
-use super::picker::Picker;
+use super::picker::{Kind, Picker};
 use super::{centered, selected_style, Action};
 use crate::{config, Options};
 
@@ -295,7 +295,8 @@ impl SettingsTab {
                 Action::None
             }
             Item::Groups | Item::Channels => {
-                self.picker = Some(Picker::open(handle, o.cache_dir.clone(), o.strip_hd_tv));
+                let kind = if item == Item::Groups { Kind::Groups } else { Kind::Channels };
+                self.picker = Some(Picker::open(handle, o.cache_dir.clone(), o.strip_hd_tv, kind));
                 Action::None
             }
             Item::Save => Action::SaveConfig,
@@ -331,9 +332,9 @@ impl SettingsTab {
             .map(|&item| {
                 if item.is_action() {
                     let text = if item == Item::Save {
-                        format!("▶ {} to {}", item.label(), config_path.display())
+                        format!("> {} to {}", item.label(), config_path.display())
                     } else {
-                        format!("▶ {}", item.label())
+                        format!("> {}", item.label())
                     };
                     ListItem::new(Line::styled(text, Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)))
                 } else {

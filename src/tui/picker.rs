@@ -1,9 +1,8 @@
-//! The group and channel picker, opened from the Settings tab.
+//! The group picker and the channel picker, opened from the Settings tab.
 //!
-//! One list: every group, and under an expanded group its channels. Space picks a group or a channel;
-//! `e` gives a picked channel its own XMLTV id.
+//! The group picker lists the groups; the channel picker lists the individual channels (all groups, one flat
+//! list, filterable). Space picks; in the channel picker `e` gives a channel its own XMLTV id.
 
-use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -29,6 +28,13 @@ struct Group {
     count: usize,
 }
 
+/// What the picker lists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Groups,
+    Channels,
+}
+
 #[derive(Clone, Copy)]
 enum Row {
     Group(usize),
@@ -52,6 +58,7 @@ pub struct Picker {
     handle: Handle,
     cache_dir: String,
     strip: bool,
+    kind: Kind,
     loading: Option<Receiver<Result<Vec<RawChannel>, String>>>,
     error: Option<String>,
     notice: Option<String>,
@@ -61,7 +68,6 @@ pub struct Picker {
     /// Per catalog entry: position of its group in `groups`.
     group_of: Vec<usize>,
     groups: Vec<Group>,
-    expanded: HashSet<String>,
     rows: Vec<Row>,
     state: ListState,
     filter: String,
@@ -70,11 +76,12 @@ pub struct Picker {
 }
 
 impl Picker {
-    pub fn open(handle: &Handle, cache_dir: String, strip: bool) -> Self {
+    pub fn open(handle: &Handle, cache_dir: String, strip: bool, kind: Kind) -> Self {
         let mut picker = Picker {
             handle: handle.clone(),
             cache_dir,
             strip,
+            kind,
             loading: None,
             error: None,
             notice: None,
@@ -82,7 +89,6 @@ impl Picker {
             keys: Vec::new(),
             group_of: Vec::new(),
             groups: Vec::new(),
-            expanded: HashSet::new(),
             rows: Vec::new(),
             state: ListState::default(),
             filter: String::new(),
@@ -94,12 +100,13 @@ impl Picker {
     }
 
     pub fn hints(&self) -> &'static str {
-        match self.mode {
-            Mode::Browse => {
-                "Space pick · Enter open/close group · e custom id · / filter · c clear all · R reload list · Esc back"
+        match (&self.mode, self.kind) {
+            (Mode::Browse, Kind::Groups) => "Space pick a group · / filter · c clear groups · R reload the list · Esc back",
+            (Mode::Browse, Kind::Channels) => {
+                "Space pick · e custom id · / filter · c clear channels · R reload the list · Esc back"
             }
-            Mode::Filter(_) => "type to filter · Enter keep · Esc clear",
-            Mode::NewId(..) => "type the XMLTV id to write · empty = default id · Enter accept · Esc cancel",
+            (Mode::Filter(_), _) => "type to filter · Enter keep · Esc clear",
+            (Mode::NewId(..), _) => "type the XMLTV id to write · empty = default id · Enter accept · Esc cancel",
         }
     }
 
@@ -171,16 +178,21 @@ impl Picker {
         let filtering = !q.is_empty();
 
         self.rows.clear();
-        for (gi, g) in self.groups.iter().enumerate() {
-            let matches: Vec<usize> = (g.start..g.start + g.count)
-                .filter(|&i| !filtering || self.keys[i].contains(&q))
-                .collect();
-            if filtering && matches.is_empty() {
-                continue;
+        match self.kind {
+            Kind::Groups => {
+                for (gi, g) in self.groups.iter().enumerate() {
+                    if filtering && !normalize(&format!("{} {}", g.name, g.code)).contains(&q) {
+                        continue;
+                    }
+                    self.rows.push(Row::Group(gi));
+                }
             }
-            self.rows.push(Row::Group(gi));
-            if filtering || self.expanded.contains(&g.code) {
-                self.rows.extend(matches.into_iter().map(Row::Channel));
+            Kind::Channels => {
+                for i in 0..self.catalog.len() {
+                    if !filtering || self.keys[i].contains(&q) {
+                        self.rows.push(Row::Channel(i));
+                    }
+                }
             }
         }
 
@@ -256,17 +268,7 @@ impl Picker {
             KeyCode::PageDown => self.move_by(10),
             KeyCode::Home | KeyCode::Char('g') => self.move_by(-1_000_000),
             KeyCode::End | KeyCode::Char('G') => self.move_by(1_000_000),
-            KeyCode::Right => self.set_expanded(true),
-            KeyCode::Left => self.collapse_or_go_to_group(),
-            KeyCode::Enter => match self.current() {
-                Some(Row::Group(gi)) => {
-                    let open = !self.expanded.contains(&self.groups[gi].code);
-                    self.set_expanded(open);
-                }
-                Some(Row::Channel(_)) => self.toggle(o, out),
-                None => {}
-            },
-            KeyCode::Char(' ') => self.toggle(o, out),
+            KeyCode::Enter | KeyCode::Char(' ') => self.toggle(o, out),
             KeyCode::Char('e') => match self.current() {
                 Some(Row::Channel(ci)) => {
                     let existing = config::channel_request(o, &self.catalog[ci].xml_id)
@@ -278,38 +280,15 @@ impl Picker {
             },
             KeyCode::Char('/') => self.mode = Mode::Filter(Input::new(&self.filter)),
             KeyCode::Char('c') => {
-                o.groups = None;
-                o.channels.clear();
+                match self.kind {
+                    Kind::Groups => o.groups = None,
+                    Kind::Channels => o.channels.clear(),
+                }
                 out.changed = true;
-                self.notice = Some("Cleared: every channel will be written.".to_string());
+                self.notice = Some("Cleared.".to_string());
             }
             KeyCode::Char('R') | KeyCode::F(5) => self.start_loading(true),
             _ => {}
-        }
-    }
-
-    fn set_expanded(&mut self, open: bool) {
-        let Some(Row::Group(gi)) = self.current() else { return };
-        let code = self.groups[gi].code.clone();
-        if open {
-            self.expanded.insert(code);
-        } else {
-            self.expanded.remove(&code);
-        }
-        self.rebuild_rows();
-    }
-
-    /// Left on a group closes it; Left on a channel moves up to its group.
-    fn collapse_or_go_to_group(&mut self) {
-        match self.current() {
-            Some(Row::Group(_)) => self.set_expanded(false),
-            Some(Row::Channel(_)) => {
-                let Some(selected) = self.state.selected() else { return };
-                if let Some(position) = (0..selected).rev().find(|&i| matches!(self.rows[i], Row::Group(_))) {
-                    self.state.select(Some(position));
-                }
-            }
-            None => {}
         }
     }
 
@@ -331,10 +310,11 @@ impl Picker {
     // ---------- drawing ----------
 
     pub fn draw(&mut self, f: &mut Frame, area: Rect, o: &Options) {
-        let title = format!(
-            " Groups & channels: {} ",
-            crate::config::selection_summary(o)
-        );
+        let what = match self.kind {
+            Kind::Groups => "Channel groups",
+            Kind::Channels => "Individual channels",
+        };
+        let title = format!(" {what}: {} ", config::selection_summary(o));
         let block = Block::bordered().title(title).border_style(Style::new().fg(Color::Cyan));
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -365,22 +345,14 @@ impl Picker {
             .map(|row| match *row {
                 Row::Group(gi) => {
                     let g = &self.groups[gi];
-                    let open = filtering || self.expanded.contains(&g.code);
-                    let picked = (g.start..g.start + g.count)
-                        .filter(|&i| config::channel_request(o, &self.catalog[i].xml_id).is_some())
-                        .count();
-                    let mut text = format!(
-                        "{} [{}] {} [{}]  {} channels",
-                        if open { "▾" } else { "▸" },
+                    let text = format!(
+                        "[{}] {} [{}]  {} channels",
                         if group_picked(g) { "x" } else { " " },
                         g.name,
                         g.code,
                         g.count
                     );
-                    if picked > 0 {
-                        text.push_str(&format!(", {picked} picked"));
-                    }
-                    ListItem::new(Line::styled(text, Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+                    ListItem::new(Line::styled(text, Style::new().fg(Color::Cyan)))
                 }
                 Row::Channel(ci) => {
                     let e = &self.catalog[ci];
@@ -392,7 +364,7 @@ impl Picker {
                     } else {
                         " "
                     };
-                    let mut spans = vec![Span::raw(format!("    [{mark}] {:<w$}  {}", e.xml_id, e.name, w = self.id_width))];
+                    let mut spans = vec![Span::raw(format!("[{mark}] {:<w$}  {}", e.xml_id, e.name, w = self.id_width))];
                     if let Some(new_id) = request.and_then(|r| r.new_id.as_deref()) {
                         spans.push(Span::styled(format!("  → {new_id}"), Style::new().fg(Color::Yellow)));
                     }
@@ -430,7 +402,10 @@ impl Picker {
                     v.push(Line::styled(format!("Filter: {}", self.filter), Style::new().fg(Color::Yellow)));
                 }
                 v.push(Line::styled(
-                    "[x] picked   [g] comes with its group   groups and channels together are all written",
+                    match self.kind {
+                        Kind::Groups => "[x] picked   no group and no channel picked means every channel is written",
+                        Kind::Channels => "[x] picked   [g] comes with a picked group   picked groups and channels are all written",
+                    },
                     Style::new().fg(Color::DarkGray),
                 ));
                 v

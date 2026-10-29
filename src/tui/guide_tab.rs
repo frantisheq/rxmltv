@@ -550,7 +550,7 @@ impl GuideTab {
                     let is_now = p.start.timestamp() <= now && end.is_some_and(|e| now < e);
                     let is_past = end.is_some_and(|e| e <= now);
 
-                    let mut text = format!("{} {}  {}", if is_now { "▶" } else { " " }, p.start.format("%H:%M"), p.title);
+                    let mut text = format!("{} {}  {}", if is_now { ">" } else { " " }, p.start.format("%H:%M"), p.title);
                     let tags = p.tags();
                     if !tags.is_empty() {
                         text.push_str(&format!("  [{}]", tags.join(" ")));

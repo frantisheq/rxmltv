@@ -116,6 +116,10 @@ rxmltv --tui                    # settings are read from and saved to ./rxmltv.c
 rxmltv --tui --config my.conf   # use another settings file
 ```
 
+![The Guide tab: channels, one day of programmes, and details](docs/tui-guide.jpg)
+
+![The Settings tab: the updater's options as a menu](docs/tui-settings.jpg)
+
 Three tabs (`1`, `2`, `3` or F1-F3; `?` shows all keys; `q` quits):
 
 - **Guide**: browses the generated XMLTV file (`--output`, plain or `.gz`). Channels on the left, one day's
