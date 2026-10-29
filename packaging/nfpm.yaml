@@ -1,0 +1,28 @@
+# Builds the .deb and .rpm packages (see the "release" job in .github/workflows/build.yml).
+# The variables come from the environment: ARCH (amd64, arm64, riscv64), VERSION and BINARY (the built executable).
+name: rxmltv
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: rxmltv maintainers <noreply@example.com>
+description: |
+  XMLTV/EPG generator with a terminal UI.
+  Downloads TV listings and writes an XMLTV file, with an interactive guide browser, favorites, and
+  a settings menu (rxmltv --tui). Can upload the result over FTP, FTPS, SFTP or WebDAV.
+license: Unspecified
+
+contents:
+  - src: ${BINARY}
+    dst: /usr/bin/rxmltv
+    file_info:
+      mode: 0755
+  - src: README.md
+    dst: /usr/share/doc/rxmltv/README.md
+    file_info:
+      mode: 0644
+
+# Uploading (FTP, FTPS, SFTP, WebDAV) is done by curl. Everything else works without it.
+recommends:
+  - curl

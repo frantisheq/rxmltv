@@ -22,6 +22,18 @@ Download the archive for your system from the [Releases](../../releases) page an
 | macOS | Apple Silicon | `rxmltv-<version>-macos-arm64.tar.gz` |
 | | Intel | `rxmltv-<version>-macos-x64.tar.gz` |
 
+**Debian, Ubuntu and relatives** (`.deb`) and **Fedora, RHEL, openSUSE and relatives** (`.rpm`) packages are
+published for x86-64, ARM64 and RISC-V 64 as well:
+
+```sh
+sudo dpkg -i rxmltv_<version>_amd64.deb          # or: sudo apt install ./rxmltv_<version>_amd64.deb
+sudo rpm -i rxmltv-<version>-1.x86_64.rpm        # or: sudo dnf install ./rxmltv-<version>-1.x86_64.rpm
+```
+
+They install `rxmltv` into `/usr/bin` and the README into `/usr/share/doc/rxmltv`. The binary is the same static
+build as the tar.gz, so the packages have no dependencies; `curl` is only recommended (it is used for uploads).
+Settings and the cache stay per user, in `~/.rxmltv`.
+
 There is no RISC-V build for Windows, macOS or FreeBSD: Windows and macOS don't exist for RISC-V, and FreeBSD's
 RISC-V Rust target has no CI route yet.
 
@@ -247,4 +259,6 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The workflow attaches all archives and `SHA256SUMS.txt` to a new GitHub release.
+The workflow attaches all archives, the `.deb` and `.rpm` packages (built with
+[nfpm](https://nfpm.goreleaser.com/) from `packaging/nfpm.yaml`) and `SHA256SUMS.txt` to a new GitHub release.
+Before the first release, set the real `maintainer` and `license` in `packaging/nfpm.yaml`.

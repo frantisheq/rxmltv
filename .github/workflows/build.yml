@@ -1,6 +1,7 @@
 # Builds the Rust binary for Linux, FreeBSD, Windows and macOS (x86-64, ARM64 and, where it exists, RISC-V)
 # on every push/PR to main. Tests run on every target that can execute on its runner.
-# Pushing a tag starting with "v" additionally creates a GitHub release with all builds.
+# Pushing a tag starting with "v" additionally creates a GitHub release with all builds, plus .deb and .rpm
+# packages for Linux (x86-64, ARM64, RISC-V).
 name: build
 
 on:
@@ -118,6 +119,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5   # for packaging/nfpm.yaml and the README
+
       - name: Download build artifacts
         uses: actions/download-artifact@v5
         with:
@@ -141,6 +144,31 @@ jobs:
               tar -czf "dist/$dir.tar.gz" "$dir"
             fi
           done
+
+      # .deb and .rpm from the static Linux binaries. nfpm needs no Rust, only the binary and
+      # packaging/nfpm.yaml; ARCH, VERSION and BINARY fill in the variables in that file.
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Linux packages (deb, rpm)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          export VERSION="${TAG#v}"
+          for pair in linux-x64:amd64 linux-arm64:arm64 linux-riscv64:riscv64; do
+            rid="${pair%%:*}"
+            export ARCH="${pair##*:}"
+            export BINARY="artifacts/rxmltv-$rid/rxmltv"
+            chmod +x "$BINARY"
+            for format in deb rpm; do
+              nfpm package --config packaging/nfpm.yaml --packager "$format" --target dist/
+            done
+          done
+          for deb in dist/*.deb; do dpkg-deb --info "$deb" | head -n 12; done
+
+      - name: Checksums
+        run: |
           (cd dist && sha256sum * > SHA256SUMS.txt)
           ls -l dist
 
