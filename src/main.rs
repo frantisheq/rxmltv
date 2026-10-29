@@ -38,7 +38,7 @@ type BoxError = Box<dyn Error + Send + Sync>;
 const USAGE: &str = r##"Usage: rxmltv [options]
   --days <n>          Number of days to download (default 7)
   --output <file>     Output XMLTV file (default xmltv.xml; a .gz name is written compressed)
-  --cache-dir <dir>   Cache folder (default data/cache/)
+  --cache-dir <dir>   Cache folder (default ~/.rxmltv/cache)
   --clean-cache       Delete cached files older than today
   --concurrency <n>   Parallel downloads (default 4)
   --groups <a,b,c>    Only these channel groups, by name or code, e.g. "České,Slovenské" or "cz,sk" (default: all groups)
@@ -57,6 +57,8 @@ const USAGE: &str = r##"Usage: rxmltv [options]
   --keep-empty-channels  Also write channels that have no programmes
   --no-images         Don't write poster <icon> elements
   --retry-missing     Ask the server again for items it had no data for (otherwise skipped for 12 h)
+  --compress-cache    Store cache files gzip-compressed (and compress the existing ones) to save disk space
+  --purge-cache       Delete every cached file first (including the channel list), then update
   --refresh-channels  Download the channel list again instead of using the cached channels.xml
   --post-command <c>  Run this shell command after a successful update ({file} is the output file,
                       also in $RXMLTV_OUTPUT). It runs before the upload
@@ -84,6 +86,8 @@ pub struct Options {
     pub no_images: bool,
     pub retry_missing: bool,
     pub refresh_channels: bool,
+    pub compress_cache: bool,
+    pub purge_cache: bool,
     pub strip_hd_tv: bool,
     pub tui: bool,
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -101,7 +105,7 @@ impl Default for Options {
             days: 7,
             clean_cache: false,
             output: "xmltv.xml".to_string(),
-            cache_dir: "data/cache/".to_string(),
+            cache_dir: config::default_cache_dir(),
             concurrency: 4,
             groups: None,
             channels: Vec::new(),
@@ -112,6 +116,8 @@ impl Default for Options {
             no_images: false,
             retry_missing: false,
             refresh_channels: false,
+            compress_cache: false,
+            purge_cache: false,
             strip_hd_tv: false,
             tui: false,
             config_path: None,
@@ -284,8 +290,15 @@ fn find_config(args: &[String]) -> Result<Option<String>, String> {
         i += 1;
     }
 
-    if args.iter().any(|a| a == "--tui") && std::path::Path::new(config::DEFAULT_PATH).exists() {
-        return Ok(Some(config::DEFAULT_PATH.to_string()));
+    if args.iter().any(|a| a == "--tui") {
+        // ~/.rxmltv/rxmltv.conf, or an older ./rxmltv.conf from before the settings moved there
+        let home = config::default_path();
+        if home.exists() {
+            return Ok(Some(home.to_string_lossy().to_string()));
+        }
+        if std::path::Path::new("rxmltv.conf").exists() {
+            return Ok(Some("rxmltv.conf".to_string()));
+        }
     }
     Ok(None)
 }
@@ -324,6 +337,8 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--no-images" => o.no_images = true,
             "--retry-missing" => o.retry_missing = true,
             "--refresh-channels" => o.refresh_channels = true,
+            "--compress-cache" => o.compress_cache = true,
+            "--purge-cache" => o.purge_cache = true,
             "--upload" => o.upload.enabled = true,
             "--post-command" => o.post_command = take_value(name, inline, args, &mut i)?,
             "--strip-hd-tv" => o.strip_hd_tv = true,
@@ -712,9 +727,9 @@ pub struct CatalogEntry {
 /// Loads the server's channel list: from the cache, or from the server when `refresh` is set.
 #[cfg(feature = "tui")]
 pub async fn load_raw_channels(cache_dir: &str, refresh: bool) -> Result<Vec<RawChannel>, String> {
-    let dir = PathBuf::from(cache_dir);
+    let dir = util::expand_home(cache_dir);
     fs::create_dir_all(&dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
-    let fetcher = Fetcher::new(&dir, 2, false).map_err(|e| e.to_string())?;
+    let fetcher = Fetcher::new(&dir, 2, false, false).map_err(|e| e.to_string())?;
     fetcher
         .get(CHANNEL_LIST_URI, CHANNEL_LIST_FILE, refresh, parse_channel_list)
         .await
@@ -819,17 +834,37 @@ impl Drop for PendingTasks {
 }
 
 async fn run(opts: Options) -> Result<u8, BoxError> {
-    let cache_dir = PathBuf::from(&opts.cache_dir);
+    let cache_dir = util::expand_home(&opts.cache_dir);
     fs::create_dir_all(&cache_dir)?;
 
     let tz = chrono_tz::Europe::Prague;
     let today = Utc::now().with_timezone(&tz).date_naive();
 
+    if opts.purge_cache {
+        let report = fetcher::purge_cache(&cache_dir)?;
+        progress::info(format!(
+            "Purged the cache: {} files, {}.",
+            stats::n0(report.files as u64),
+            upload::human_size(report.bytes)
+        ));
+    }
+
     if opts.clean_cache {
         fetcher::clean_cache(&cache_dir, today);
     }
 
-    let fetcher = Arc::new(Fetcher::new(&cache_dir, opts.concurrency, opts.retry_missing)?);
+    if opts.compress_cache {
+        let report = fetcher::compress_existing(&cache_dir);
+        if report.files > 0 {
+            progress::info(format!(
+                "Compressed {} cache files, saving {}.",
+                stats::n0(report.files as u64),
+                upload::human_size(report.bytes)
+            ));
+        }
+    }
+
+    let fetcher = Arc::new(Fetcher::new(&cache_dir, opts.concurrency, opts.retry_missing, opts.compress_cache)?);
 
     let Some(mut raw) = fetcher.get(CHANNEL_LIST_URI, CHANNEL_LIST_FILE, opts.refresh_channels, parse_channel_list).await else {
         progress::info("Could not load the channel list.");

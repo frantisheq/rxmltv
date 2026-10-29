@@ -5,14 +5,27 @@
 use std::fmt::Write as _;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::groups::normalize;
 use crate::upload::Protocol;
 use crate::util::with_suffix;
 use crate::{ChannelRequest, Options};
 
-pub const DEFAULT_PATH: &str = "rxmltv.conf";
+/// The hidden folder where rxmltv keeps what it creates: ~/.rxmltv (the settings file, the favorites, the
+/// channel order and the cache).
+pub fn app_dir() -> PathBuf {
+    crate::util::home_dir().map(|home| home.join(".rxmltv")).unwrap_or_else(|| PathBuf::from(".rxmltv"))
+}
+
+/// Where the terminal UI keeps the settings unless told otherwise.
+pub fn default_path() -> PathBuf {
+    app_dir().join("rxmltv.conf")
+}
+
+pub fn default_cache_dir() -> String {
+    app_dir().join("cache").to_string_lossy().to_string()
+}
 
 // ---------- colours (for the terminal UI's dots) ----------
 
@@ -158,6 +171,7 @@ pub fn parse(text: &str) -> Result<Options, String> {
             "no_images" => o.no_images = flag("no_images")?,
             "retry_missing" => o.retry_missing = flag("retry_missing")?,
             "refresh_channels" => o.refresh_channels = flag("refresh_channels")?,
+            "compress_cache" => o.compress_cache = flag("compress_cache")?,
             "show_quality" => o.ui.show_quality = flag("show_quality")?,
             "show_new" => o.ui.show_new = flag("show_new")?,
             "show_rerun" => o.ui.show_rerun = flag("show_rerun")?,
@@ -242,6 +256,7 @@ pub fn to_text(o: &Options) -> String {
     let _ = writeln!(s, "no_images = {}", o.no_images);
     let _ = writeln!(s, "retry_missing = {}", o.retry_missing);
     let _ = writeln!(s, "refresh_channels = {}", o.refresh_channels);
+    let _ = writeln!(s, "compress_cache = {}", o.compress_cache);
 
     let _ = writeln!(s, "\n# Terminal UI");
     let _ = writeln!(s, "show_quality = {}", o.ui.show_quality);
@@ -342,6 +357,7 @@ pub fn command_line(o: &Options) -> String {
         (o.no_images, "--no-images"),
         (o.retry_missing, "--retry-missing"),
         (o.refresh_channels, "--refresh-channels"),
+        (o.compress_cache, "--compress-cache"),
     ] {
         if on {
             parts.push(flag.to_string());

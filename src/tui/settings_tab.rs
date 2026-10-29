@@ -26,6 +26,7 @@ enum Item {
     Groups,
     Channels,
     CleanCache,
+    CompressCache,
     StripHdTv,
     KeepTitleNumbers,
     KeepEmptyChannels,
@@ -52,9 +53,10 @@ enum Item {
     Save,
     Run,
     UploadNow,
+    PurgeCache,
 }
 
-const ITEMS: [Item; 33] = [
+const ITEMS: [Item; 35] = [
     Item::Days,
     Item::Output,
     Item::CacheDir,
@@ -62,6 +64,7 @@ const ITEMS: [Item; 33] = [
     Item::Groups,
     Item::Channels,
     Item::CleanCache,
+    Item::CompressCache,
     Item::StripHdTv,
     Item::KeepTitleNumbers,
     Item::KeepEmptyChannels,
@@ -88,6 +91,7 @@ const ITEMS: [Item; 33] = [
     Item::Save,
     Item::Run,
     Item::UploadNow,
+    Item::PurgeCache,
 ];
 
 impl Item {
@@ -100,6 +104,7 @@ impl Item {
             Item::Groups => "Channel groups",
             Item::Channels => "Individual channels",
             Item::CleanCache => "Clean the cache first",
+            Item::CompressCache => "Compress cache files",
             Item::StripHdTv => "Strip HD / TV from names",
             Item::KeepTitleNumbers => "Keep numbers in titles",
             Item::KeepEmptyChannels => "Write empty channels",
@@ -126,6 +131,7 @@ impl Item {
             Item::Save => "Save settings",
             Item::Run => "Run the update now",
             Item::UploadNow => "Upload now",
+            Item::PurgeCache => "Purge the cache now",
         }
     }
 
@@ -138,6 +144,7 @@ impl Item {
             Item::Groups => "Enter opens the group picker. No groups and no channels picked means every channel.",
             Item::Channels => "Enter opens the channel picker: pick single channels, and optionally give them an XMLTV id of your own.",
             Item::CleanCache => "Before updating, delete cached files older than today and leftover temporary files.",
+            Item::CompressCache => "Store cache files gzip-compressed to save disk space (usually about a fifth of the size). Existing files are compressed at the next update; both kinds are always readable.",
             Item::StripHdTv => "Remove the separate words HD and TV from channel names and ids (Nova HD becomes Nova). Channel ids you picked change with it.",
             Item::KeepTitleNumbers => "Leave (3), (2/6) and roman season numbers in the title instead of writing them as episode numbers.",
             Item::KeepEmptyChannels => "Also write channels that have no programmes.",
@@ -164,17 +171,19 @@ impl Item {
             Item::Save => "Write these settings to the settings file. `rxmltv --config <file>` then uses them without the terminal UI.",
             Item::Run => "Start the update with the settings as they are now (saved or not), then the command and upload if set.",
             Item::UploadNow => "Upload the output file now, with a progress bar on the Upload tab.",
+            Item::PurgeCache => "Delete every cached file, including the channel list (press Enter twice). The next update downloads everything again.",
         }
     }
 
     fn is_action(self) -> bool {
-        matches!(self, Item::Save | Item::Run | Item::UploadNow)
+        matches!(self, Item::Save | Item::Run | Item::UploadNow | Item::PurgeCache)
     }
 
     fn is_flag(self) -> bool {
         matches!(
             self,
             Item::CleanCache
+                | Item::CompressCache
                 | Item::StripHdTv
                 | Item::KeepTitleNumbers
                 | Item::KeepEmptyChannels
@@ -218,6 +227,7 @@ impl Item {
 fn flag_ref(item: Item, o: &mut Options) -> Option<&mut bool> {
     match item {
         Item::CleanCache => Some(&mut o.clean_cache),
+        Item::CompressCache => Some(&mut o.compress_cache),
         Item::StripHdTv => Some(&mut o.strip_hd_tv),
         Item::KeepTitleNumbers => Some(&mut o.keep_title_numbers),
         Item::KeepEmptyChannels => Some(&mut o.keep_empty_channels),
@@ -236,6 +246,7 @@ fn flag_ref(item: Item, o: &mut Options) -> Option<&mut bool> {
 fn flag_get(item: Item, o: &Options) -> bool {
     match item {
         Item::CleanCache => o.clean_cache,
+        Item::CompressCache => o.compress_cache,
         Item::StripHdTv => o.strip_hd_tv,
         Item::KeepTitleNumbers => o.keep_title_numbers,
         Item::KeepEmptyChannels => o.keep_empty_channels,
@@ -311,6 +322,7 @@ fn value_text(item: Item, o: &Options) -> String {
         }
         Item::Days | Item::Output | Item::CacheDir | Item::Concurrency | Item::FavoriteColor => text_of(item, o),
         Item::CleanCache
+        | Item::CompressCache
         | Item::StripHdTv
         | Item::KeepTitleNumbers
         | Item::KeepEmptyChannels
@@ -322,7 +334,7 @@ fn value_text(item: Item, o: &Options) -> String {
         | Item::ShowRerun
         | Item::UploadAuto
         | Item::UploadInsecure => flag(flag_get(item, o)),
-        Item::Save | Item::Run | Item::UploadNow => String::new(),
+        Item::Save | Item::Run | Item::UploadNow | Item::PurgeCache => String::new(),
     }
 }
 
@@ -339,6 +351,8 @@ pub struct SettingsTab {
     genres: Option<GenreEditor>,
     files: Option<FilePicker>,
     dirty: bool,
+    /// Enter was pressed once on "Purge the cache now"; the next Enter does it.
+    purge_armed: bool,
 }
 
 /// Checks and applies what was typed for a setting.
@@ -391,7 +405,7 @@ impl SettingsTab {
     pub fn new() -> Self {
         let mut state = ListState::default();
         state.select(Some(0));
-        SettingsTab { state, edit: None, picker: None, genres: None, files: None, dirty: false }
+        SettingsTab { state, edit: None, picker: None, genres: None, files: None, dirty: false, purge_armed: false }
     }
 
     pub fn dirty(&self) -> bool {
@@ -485,6 +499,7 @@ impl SettingsTab {
             return Action::None;
         }
 
+        let armed = std::mem::take(&mut self.purge_armed); // any other key cancels it
         let last = ITEMS.len() as i64 - 1;
         let current = self.state.selected().unwrap_or(0) as i64;
         match key.code {
@@ -498,7 +513,7 @@ impl SettingsTab {
             KeyCode::Char('e') if self.selected() == Item::UploadKey => self.begin_edit(o),
             KeyCode::Left | KeyCode::Char('-') => self.adjust(o, -1),
             KeyCode::Right | KeyCode::Char('+') => self.adjust(o, 1),
-            KeyCode::Enter | KeyCode::Char(' ') => return self.activate(o, handle),
+            KeyCode::Enter | KeyCode::Char(' ') => return self.activate(o, handle, armed),
             _ => {}
         }
         Action::None
@@ -519,7 +534,7 @@ impl SettingsTab {
         self.edit = Some(Edit { item, input: Input::new(&text_of(item, o)), error: None });
     }
 
-    fn activate(&mut self, o: &mut Options, handle: &Handle) -> Action {
+    fn activate(&mut self, o: &mut Options, handle: &Handle, armed: bool) -> Action {
         let item = self.selected();
         match item {
             Item::Groups | Item::Channels => {
@@ -542,6 +557,17 @@ impl SettingsTab {
             Item::Save => Action::SaveConfig,
             Item::Run => Action::StartUpdate,
             Item::UploadNow => Action::StartUpload,
+            Item::PurgeCache => {
+                if armed {
+                    Action::PurgeCache
+                } else {
+                    self.purge_armed = true;
+                    Action::Status(format!(
+                        "This deletes ALL cached files in {}. Press Enter again to do it, any other key to cancel.",
+                        crate::util::expand_home(&o.cache_dir).display()
+                    ))
+                }
+            }
             _ if item.is_text() => {
                 self.begin_edit(o);
                 Action::None

@@ -40,7 +40,9 @@ rxmltv [options]
 |--------|---------|
 | `--days <n>` | Days to download, starting today (default 7) |
 | `--output <file>` | Output file (default `xmltv.xml`). A name ending in `.gz` is written gzip-compressed |
-| `--cache-dir <dir>` | Cache folder (default `data/cache/`) |
+| `--cache-dir <dir>` | Cache folder (default `~/.rxmltv/cache`; a leading `~` is the home folder) |
+| `--compress-cache` | Store cache files gzip-compressed, and compress the existing ones, to save disk space |
+| `--purge-cache` | Delete every cached file first (also the channel list), then update |
 | `--clean-cache` | Delete cached files older than today, expired "no data" markers and leftover temp files |
 | `--concurrency <n>` | Parallel downloads (default 4) |
 | `--groups <a,b,c>` | Only these channel groups, by name or code, e.g. `"České,Slovenské"` or `cz,sk`. Default: all groups |
@@ -114,9 +116,15 @@ Run it once or twice a day. For example with cron:
 ### Terminal UI
 
 ```sh
-rxmltv --tui                    # settings are read from and saved to ./rxmltv.conf
+rxmltv --tui                    # settings are read from and saved to ~/.rxmltv/rxmltv.conf
 rxmltv --tui --config my.conf   # use another settings file
 ```
+
+**Where files go:** everything rxmltv creates for its own use lives in the hidden folder `~/.rxmltv` (on Windows
+`%USERPROFILE%\.rxmltv`): `rxmltv.conf` (settings), `rxmltv.favorites`, `rxmltv.order` and the `cache/` folder.
+The generated guide (`--output`, default `xmltv.xml`) is written where you say. An `rxmltv.conf` left in the current
+folder by an earlier version is still used when `~/.rxmltv/rxmltv.conf` does not exist. The old default cache
+`data/cache/` is no longer used; delete it if it is still there.
 
 ![The Guide tab: channels, one day of programmes, and details](docs/tui-guide.jpg)
 
@@ -175,7 +183,7 @@ If either fails, the guide is still written and the exit code is 3.
 
 The settings file is plain text, one `key = value` per line: `days`, `output`, `cache_dir`, `concurrency`,
 `groups`, repeated `channel`, the yes/no options `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
-`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, the display options `show_quality`,
+`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, the display options `show_quality`,
 `show_new`, `show_rerun`, `favorite_color`, repeated `genre_color = keyword = colour`, and `post_command` and the
 `upload_*` settings (`upload_after_update`, `upload_protocol`, `upload_host`, `upload_port`, `upload_user`,
 `upload_password`, `upload_folder`, `upload_name`, `upload_key`, `upload_key_passphrase`, `upload_insecure`).

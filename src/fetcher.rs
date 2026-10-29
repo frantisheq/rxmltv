@@ -1,11 +1,15 @@
 //! Downloads XML into an on-disk cache, with retries and a cap on parallel requests.
 
 use std::fs;
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use reqwest::StatusCode;
 use roxmltree::Node;
 use tokio::sync::Semaphore;
@@ -24,12 +28,14 @@ pub const MISS_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 pub struct Fetcher {
     cache_dir: PathBuf,
     retry_missing: bool,
+    /// New cache files are written gzip-compressed (reading handles both kinds).
+    compress: bool,
     http: reqwest::Client,
     gate: Semaphore,
 }
 
 impl Fetcher {
-    pub fn new(cache_dir: &Path, concurrency: usize, retry_missing: bool) -> Result<Self, reqwest::Error> {
+    pub fn new(cache_dir: &Path, concurrency: usize, retry_missing: bool, compress: bool) -> Result<Self, reqwest::Error> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(30))
@@ -40,6 +46,7 @@ impl Fetcher {
         Ok(Self {
             cache_dir: cache_dir.to_path_buf(),
             retry_missing,
+            compress,
             http,
             gate: Semaphore::new(concurrency),
         })
@@ -68,17 +75,17 @@ impl Fetcher {
         let miss_path = with_suffix(&path, ".miss");
 
         if refresh {
-            try_delete(&path); // throw the cached copy away and download it again
+            delete_cached(&path); // throw the cached copy away and download it again
         }
 
-        // 1. In the cache: a plain synchronous read.
-        if path.exists() {
-            let cached = fs::read(&path).ok().and_then(|bytes| parse_xml(&bytes, parse));
+        // 1. In the cache (plain or compressed): a synchronous read.
+        if cache_exists(&path) {
+            let cached = read_cached(&path).and_then(|bytes| parse_xml(&bytes, parse));
             if let Some(value) = cached {
                 stats::inc(&stats::CACHE_HITS);
                 return Some(value);
             }
-            try_delete(&path); // unreadable or corrupt cache entry: fetch it again
+            delete_cached(&path); // unreadable or corrupt cache entry: fetch it again
         }
 
         // 2. The server had no data for this one recently, so don't ask again on every run.
@@ -94,7 +101,7 @@ impl Fetcher {
                 Ok(bytes) => {
                     return match parse_xml(&bytes, parse) {
                         Some(value) => {
-                            store(&path, &bytes);
+                            store(&path, &bytes, self.compress);
                             stats::inc(&stats::DOWNLOADS);
                             try_delete(&miss_path);
                             Some(value)
@@ -123,7 +130,7 @@ impl Fetcher {
     /// The file is for another programme: drop it and don't ask again for a while.
     pub fn reject(&self, cache_file: &str) {
         let path = self.cache_dir.join(cache_file);
-        try_delete(&path);
+        delete_cached(&path);
         let _ = fs::write(with_suffix(&path, ".miss"), "");
     }
 
@@ -149,14 +156,56 @@ fn is_fresh(miss_path: &Path) -> bool {
         .is_some_and(|age| age < MISS_TTL)
 }
 
-/// Writes the cache entry. There is no `await` between creating the temporary file and renaming it,
-/// so cancelling the program can never leave a half-written entry behind.
-fn store(path: &Path, bytes: &[u8]) {
-    let tmp = with_suffix(path, ".tmp");
-    let result = fs::write(&tmp, bytes).and_then(|_| fs::rename(&tmp, path));
-    if let Err(e) = result {
-        try_delete(&tmp);
-        crate::progress::warn(format!("Warning: could not write {}: {e}", path.display()));
+/// The compressed twin of a cache file: "x.xml" -> "x.xml.gz".
+fn gz_path(path: &Path) -> PathBuf {
+    with_suffix(path, ".gz")
+}
+
+fn cache_exists(path: &Path) -> bool {
+    path.exists() || gz_path(path).exists()
+}
+
+fn delete_cached(path: &Path) {
+    try_delete(path);
+    try_delete(&gz_path(path));
+}
+
+/// The bytes of a cache entry, whether it is stored plain or compressed.
+fn read_cached(path: &Path) -> Option<Vec<u8>> {
+    if let Ok(bytes) = fs::read(path) {
+        return Some(bytes);
+    }
+    let packed = fs::read(gz_path(path)).ok()?;
+    let mut plain = Vec::new();
+    GzDecoder::new(&packed[..]).read_to_end(&mut plain).ok()?;
+    Some(plain)
+}
+
+fn gzip(bytes: &[u8]) -> io::Result<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes)?;
+    encoder.finish()
+}
+
+/// Writes the cache entry (compressed or plain, and removes the other kind if there is one). There is no
+/// `await` between creating the temporary file and renaming it, so cancelling the program can never leave
+/// a half-written entry behind.
+fn store(path: &Path, bytes: &[u8], compress: bool) {
+    let (target, other) = if compress { (gz_path(path), path.to_path_buf()) } else { (path.to_path_buf(), gz_path(path)) };
+    let tmp = with_suffix(&target, ".tmp");
+
+    let result = (|| -> io::Result<()> {
+        let data = if compress { gzip(bytes)? } else { bytes.to_vec() };
+        fs::write(&tmp, data)?;
+        fs::rename(&tmp, &target)
+    })();
+
+    match result {
+        Ok(()) => try_delete(&other),
+        Err(e) => {
+            try_delete(&tmp);
+            crate::progress::warn(format!("Warning: could not write {}: {e}", target.display()));
+        }
     }
 }
 
@@ -212,7 +261,7 @@ pub fn clean_cache(cache_dir: &Path, today: NaiveDate) {
             if expired {
                 try_delete(&path);
             }
-        } else if let Some(stem) = file_name.strip_suffix(".xml") {
+        } else if let Some(stem) = file_name.strip_suffix(".gz").unwrap_or(file_name).strip_suffix(".xml") {
             // File names look like "<id>-yyyyMMdd.xml" or "<id>-yyyyMMddHHmmss.xml".
             let Some(dash) = stem.rfind('-') else { continue };
             let Some(date_text) = stem.get(dash + 1..dash + 9) else { continue };
@@ -228,9 +277,136 @@ pub fn clean_cache(cache_dir: &Path, today: NaiveDate) {
     }
 }
 
+/// What a purge or a compression did.
+pub struct CacheReport {
+    pub files: usize,
+    /// Bytes deleted (purge) or saved (compression).
+    pub bytes: u64,
+}
+
+/// Only files the cache itself makes are ever touched, so a wrong cache folder setting cannot cost anything else.
+fn is_cache_file(name: &str) -> bool {
+    [".xml", ".xml.gz", ".miss", ".tmp"].iter().any(|suffix| name.ends_with(suffix))
+}
+
+/// Deletes every cached file (data, "no data" markers and leftovers), including the channel list.
+pub fn purge_cache(cache_dir: &Path) -> io::Result<CacheReport> {
+    let mut report = CacheReport { files: 0, bytes: 0 };
+    let entries = match fs::read_dir(cache_dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(report),
+        Err(e) => return Err(e),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !is_cache_file(name) || !path.is_file() {
+            continue;
+        }
+        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        if fs::remove_file(&path).is_ok() {
+            report.files += 1;
+            report.bytes += size;
+        }
+    }
+    Ok(report)
+}
+
+/// Compresses the cache files that are still plain XML ("x.xml" becomes "x.xml.gz").
+pub fn compress_existing(cache_dir: &Path) -> CacheReport {
+    let mut report = CacheReport { files: 0, bytes: 0 };
+    let Ok(entries) = fs::read_dir(cache_dir) else { return report };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_xml = path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".xml"));
+        if !is_xml || !path.is_file() {
+            continue;
+        }
+        let Ok(plain) = fs::read(&path) else { continue };
+        let Ok(packed) = gzip(&plain) else { continue };
+
+        let target = gz_path(&path);
+        let tmp = with_suffix(&target, ".tmp");
+        if fs::write(&tmp, &packed).and_then(|_| fs::rename(&tmp, &target)).is_ok() {
+            try_delete(&path);
+            report.files += 1;
+            report.bytes += (plain.len() as u64).saturating_sub(packed.len() as u64);
+        } else {
+            try_delete(&tmp);
+        }
+    }
+    report
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rxmltv-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn compressed_entries_are_read_back() {
+        let dir = temp_dir("fetch-gz");
+        let path = dir.join("a-20261029.xml");
+        store(&path, b"<a>\xC4\x8D</a>", true);
+        assert!(!path.exists());
+        assert!(gz_path(&path).exists());
+        assert_eq!(read_cached(&path).as_deref(), Some(&b"<a>\xC4\x8D</a>"[..]));
+
+        // switching compression off replaces the compressed file
+        store(&path, b"<a/>", false);
+        assert!(path.exists() && !gz_path(&path).exists());
+        assert_eq!(read_cached(&path).as_deref(), Some(&b"<a/>"[..]));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn existing_files_are_compressed() {
+        let dir = temp_dir("fetch-compress");
+        let big = "<x>0123456789</x>".repeat(200);
+        fs::write(dir.join("a-20261029.xml"), &big).unwrap();
+        fs::write(dir.join("notes.txt"), "keep").unwrap();
+
+        let report = compress_existing(&dir);
+        assert_eq!(report.files, 1);
+        assert!(report.bytes > 0);
+        assert!(!dir.join("a-20261029.xml").exists());
+        assert_eq!(read_cached(&dir.join("a-20261029.xml")).unwrap(), big.as_bytes());
+        assert!(dir.join("notes.txt").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn purging_removes_only_cache_files() {
+        let dir = temp_dir("fetch-purge");
+        for name in ["channels.xml", "a-20261029.xml.gz", "b-20261029.xml.miss", "c.xml.tmp", "precious.doc"] {
+            fs::write(dir.join(name), "12345").unwrap();
+        }
+        let report = purge_cache(&dir).unwrap();
+        assert_eq!(report.files, 4);
+        assert_eq!(report.bytes, 20);
+        assert!(dir.join("precious.doc").exists());
+        assert!(purge_cache(&dir.join("missing")).unwrap().files == 0); // no folder: nothing to do
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compressed_files_are_cleaned_by_date_too() {
+        let dir = temp_dir("fetch-clean");
+        fs::write(dir.join("a-20200101.xml.gz"), "x").unwrap();
+        fs::write(dir.join("a-20990101.xml.gz"), "x").unwrap();
+        clean_cache(&dir, NaiveDate::from_ymd_opt(2026, 10, 29).unwrap());
+        assert!(!dir.join("a-20200101.xml.gz").exists());
+        assert!(dir.join("a-20990101.xml.gz").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn utf8_with_bom_is_decoded() {

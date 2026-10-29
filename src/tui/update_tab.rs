@@ -35,6 +35,10 @@ impl UpdateTab {
         "s start the update · x cancel it · ? help · q quit"
     }
 
+    pub fn is_running(&self) -> bool {
+        self.running()
+    }
+
     fn running(&self) -> bool {
         matches!(self.state, State::Running { .. })
     }

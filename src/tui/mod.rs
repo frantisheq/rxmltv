@@ -61,6 +61,8 @@ pub enum Action {
     SaveConfig,
     StartUpdate,
     StartUpload,
+    /// Delete every cached file (the Settings tab asks for confirmation first).
+    PurgeCache,
     ReloadGuide,
     /// Add the show to the favorites, or remove it when it is one already.
     ToggleFavorite(String),
@@ -210,7 +212,10 @@ pub fn run(opts: Options) -> ExitCode {
 
 impl App {
     fn new(opts: Options, handle: Handle) -> Self {
-        let config_path = PathBuf::from(opts.config_path.clone().unwrap_or_else(|| config::DEFAULT_PATH.to_string()));
+        let config_path = match &opts.config_path {
+            Some(path) => PathBuf::from(path),
+            None => config::default_path(),
+        };
         let guide = GuideTab::new(PathBuf::from(&opts.output), config_path.with_extension("order"));
         let favorites = Favorites::load(config_path.with_extension("favorites"));
         App {
@@ -362,6 +367,22 @@ impl App {
             Action::StartUpload => {
                 self.goto(Tab::Upload);
                 self.upload.start(&self.opts, &self.handle);
+            }
+            Action::PurgeCache => {
+                let text = if self.update.is_running() {
+                    "An update is running: cancel it (Update tab, x) before purging the cache.".to_string()
+                } else {
+                    let dir = crate::util::expand_home(&self.opts.cache_dir);
+                    match crate::fetcher::purge_cache(&dir) {
+                        Ok(report) => format!(
+                            "Purged the cache: {} files, {}.",
+                            crate::stats::n0(report.files as u64),
+                            crate::upload::human_size(report.bytes)
+                        ),
+                        Err(e) => format!("Could not purge {}: {e}", dir.display()),
+                    }
+                };
+                self.set_status(text);
             }
             Action::ReloadGuide => self.guide_reload_pending = true,
             Action::ToggleFavorite(title) => {

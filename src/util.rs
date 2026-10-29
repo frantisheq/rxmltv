@@ -77,6 +77,29 @@ pub fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// The user's home folder.
+pub fn home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .filter_map(|name| std::env::var_os(name))
+        .find(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// A path as typed in the settings: a leading `~` means the home folder.
+pub fn expand_home(text: &str) -> PathBuf {
+    let text = text.trim();
+    if text == "~" {
+        return home_dir().unwrap_or_else(|| PathBuf::from(text));
+    }
+    if let Some(rest) = text.strip_prefix("~/").or_else(|| text.strip_prefix("~\\")) {
+        if let Some(home) = home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(text)
+}
+
 pub fn try_delete(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
