@@ -1,9 +1,10 @@
 //! The "Guide" tab: channels on the left, the programmes of one day on the right, details below.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{NaiveDate, Utc};
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -11,9 +12,11 @@ use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap}
 use ratatui::Frame;
 
 use super::input::Input;
-use super::{border_style, centered, fit, selected_style, Action};
+use super::{border_style, centered, fit, parse_color, selected_style, Action};
 use crate::groups::normalize;
+use crate::config::UiOptions;
 use crate::guide::{self, Guide, GuideChannel, GuideProgramme};
+use crate::store::{self, Favorites};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
@@ -41,7 +44,10 @@ pub struct GuideTab {
     error: Option<String>,
     loading: bool,
     day: Option<NaiveDate>,
-    /// Positions (in guide.channels) of the channels that pass the filter.
+    /// All channels (positions in guide.channels) in the order the user wants them.
+    order: Vec<usize>,
+    order_path: PathBuf,
+    /// Positions (in guide.channels) of the channels that pass the filter, in that order.
     visible: Vec<usize>,
     filter: String,
     channels: ListState,
@@ -79,6 +85,28 @@ fn selection(len: usize) -> ListState {
     state
 }
 
+/// Channel positions in the saved order; channels that are not in the saved order follow, as in the file.
+fn build_order(guide: &Guide, saved: &[String]) -> Vec<usize> {
+    let index: HashMap<&str, usize> =
+        guide.channels.iter().enumerate().map(|(i, c)| (c.id.as_str(), i)).collect();
+    let mut used = vec![false; guide.channels.len()];
+    let mut order = Vec::with_capacity(guide.channels.len());
+    for id in saved {
+        if let Some(&i) = index.get(id.as_str()) {
+            if !used[i] {
+                used[i] = true;
+                order.push(i);
+            }
+        }
+    }
+    for (i, taken) in used.iter().enumerate() {
+        if !taken {
+            order.push(i);
+        }
+    }
+    order
+}
+
 fn capitalize(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {
@@ -88,9 +116,11 @@ fn capitalize(text: &str) -> String {
 }
 
 impl GuideTab {
-    pub fn new(path: PathBuf) -> Self {
+    pub fn new(path: PathBuf, order_path: PathBuf) -> Self {
         GuideTab {
             path,
+            order: Vec::new(),
+            order_path,
             guide: None,
             error: None,
             loading: true,
@@ -110,6 +140,10 @@ impl GuideTab {
         &self.path
     }
 
+    pub fn guide(&self) -> Option<&Guide> {
+        self.guide.as_ref()
+    }
+
     pub fn set_path(&mut self, path: PathBuf) {
         self.path = path;
     }
@@ -125,7 +159,7 @@ impl GuideTab {
     pub fn hints(&self) -> &'static str {
         match &self.mode {
             Mode::Normal => {
-                "Tab pane · ↑↓ move · ←→ day · n now · / search · f filter channels · r reload · ? help · q quit"
+                "Tab pane · ↑↓ move · ←→ day · n now · * favorite · K/J move channel · / search · f filter · ? help"
             }
             Mode::Filter(_) => "type to filter the channels · Enter keep the filter · Esc clear it",
             Mode::Search(_) => "type to search · ↑↓ choose · Enter go to the programme · Esc close",
@@ -143,6 +177,7 @@ impl GuideTab {
         match guide::load(&self.path) {
             Ok(g) => {
                 let day = keep_day.filter(|d| g.dates.contains(d)).or_else(|| initial_day(&g));
+                self.order = build_order(&g, &store::read_lines(&self.order_path));
                 self.guide = Some(g);
                 self.error = None;
                 self.day = day;
@@ -175,12 +210,11 @@ impl GuideTab {
         };
 
         let q = normalize(&self.filter);
-        self.visible = g
-            .channels
+        self.visible = self
+            .order
             .iter()
-            .enumerate()
-            .filter(|(_, c)| q.is_empty() || c.search.contains(&q))
-            .map(|(i, _)| i)
+            .copied()
+            .filter(|&i| q.is_empty() || g.channels[i].search.contains(&q))
             .collect();
         self.channels = selection(self.visible.len());
     }
@@ -267,6 +301,15 @@ impl GuideTab {
                 self.focus = match self.focus {
                     Focus::Details => Focus::Programmes,
                     _ => Focus::Channels,
+                }
+            }
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => return self.move_channel(-1),
+            KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => return self.move_channel(1),
+            KeyCode::Char('K') => return self.move_channel(-1),
+            KeyCode::Char('J') => return self.move_channel(1),
+            KeyCode::Char('*') => {
+                if let Some((_, programme)) = self.selected_programme() {
+                    return Action::ToggleFavorite(programme.title.clone());
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -369,6 +412,55 @@ impl GuideTab {
         }
     }
 
+    /// Moves the selected channel up or down in the channel list and remembers the order.
+    fn move_channel(&mut self, delta: i64) -> Action {
+        if self.focus != Focus::Channels {
+            return Action::Status("Switch to the channels pane (Tab) to move channels.".to_string());
+        }
+        if !self.filter.is_empty() {
+            return Action::Status("Clear the channel filter (f, then Esc) before moving channels.".to_string());
+        }
+        let Some(from) = self.channels.selected() else { return Action::None };
+        let to = from as i64 + delta;
+        if to < 0 || to >= self.order.len() as i64 {
+            return Action::None;
+        }
+        let to = to as usize;
+
+        self.order.swap(from, to);
+        self.visible.swap(from, to);
+        self.channels.select(Some(to));
+
+        let ids: Vec<String> = match &self.guide {
+            Some(g) => self.order.iter().map(|&i| g.channels[i].id.clone()).collect(),
+            None => return Action::None,
+        };
+        match store::write_lines(&self.order_path, &ids) {
+            Ok(()) => Action::None,
+            Err(e) => Action::Status(format!("Could not save the channel order: {e}")),
+        }
+    }
+
+    /// Shows the next airing of a show (by normalized title): what is on now or later, else the last one.
+    pub fn show_next_airing(&mut self, key: &str) -> bool {
+        let target = {
+            let Some(g) = &self.guide else { return false };
+            let airings = g.airings(key);
+            let now = Utc::now().timestamp();
+            let upcoming = airings.iter().copied().find(|&(c, p)| {
+                g.channels[c].end(p).map_or(true, |end| end.timestamp() > now)
+            });
+            upcoming.or_else(|| airings.last().copied())
+        };
+        match target {
+            Some((channel, programme)) => {
+                self.jump_to(channel, programme);
+                true
+            }
+            None => false,
+        }
+    }
+
     fn move_day(&mut self, delta: i64) {
         let new_day = {
             let Some(g) = &self.guide else { return };
@@ -396,7 +488,7 @@ impl GuideTab {
     }
 
     /// Shows a search result: its channel, its day, and the programme itself.
-    fn jump_to(&mut self, channel: usize, programme: usize) {
+    pub fn jump_to(&mut self, channel: usize, programme: usize) {
         let day = {
             let Some(g) = &self.guide else { return };
             let Some(p) = g.channels.get(channel).and_then(|c| c.programmes.get(programme)) else { return };
@@ -424,7 +516,7 @@ impl GuideTab {
 
     // ---------- drawing ----------
 
-    pub fn draw(&mut self, f: &mut Frame, area: Rect) {
+    pub fn draw(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, ui: &UiOptions) {
         if self.loading {
             let text = format!("Loading {} ...", self.path.display());
             f.render_widget(Paragraph::new(text).block(Block::bordered().title(" Guide ")), area);
@@ -457,7 +549,7 @@ impl GuideTab {
 
         self.draw_channels(f, left);
         self.draw_header(f, head);
-        self.draw_programmes(f, programmes);
+        self.draw_programmes(f, programmes, favs, ui);
         self.draw_details(f, details);
 
         if let (Mode::Search(search), Some(g)) = (&mut self.mode, &self.guide) {
@@ -473,12 +565,18 @@ impl GuideTab {
             (area, None)
         };
 
-        let width = list_area.width.saturating_sub(4) as usize;
+        let width = list_area.width.saturating_sub(8) as usize;
         let (items, total): (Vec<ListItem<'static>>, usize) = match &self.guide {
             Some(g) => (
                 self.visible
                     .iter()
-                    .map(|&i| ListItem::new(fit(&g.channels[i].name, width)))
+                    .map(|&i| {
+                        let channel = &g.channels[i];
+                        ListItem::new(Line::from(vec![
+                            Span::styled(format!("{:<3}", channel.country), Style::new().fg(Color::Cyan)),
+                            Span::raw(fit(&channel.name, width)),
+                        ]))
+                    })
                     .collect(),
                 g.channels.len(),
             ),
@@ -536,7 +634,7 @@ impl GuideTab {
         f.render_widget(Paragraph::new(Line::from(spans)).block(Block::bordered()), area);
     }
 
-    fn draw_programmes(&mut self, f: &mut Frame, area: Rect) {
+    fn draw_programmes(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, ui: &UiOptions) {
         let focused = self.focus == Focus::Programmes;
         let list = self.day_list();
         let now = Utc::now().timestamp();
@@ -550,10 +648,10 @@ impl GuideTab {
                     let is_now = p.start.timestamp() <= now && end.is_some_and(|e| now < e);
                     let is_past = end.is_some_and(|e| e <= now);
 
-                    let mut text = format!("{} {}  {}", if is_now { ">" } else { " " }, p.start.format("%H:%M"), p.title);
-                    let tags = p.tags();
+                    let mut title = p.title.clone();
+                    let tags = p.tags_shown(ui.show_quality, ui.show_new, ui.show_rerun);
                     if !tags.is_empty() {
-                        text.push_str(&format!("  [{}]", tags.join(" ")));
+                        title.push_str(&format!("  [{}]", tags.join(" ")));
                     }
                     let style = if is_now {
                         Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)
@@ -562,7 +660,24 @@ impl GuideTab {
                     } else {
                         Style::new()
                     };
-                    ListItem::new(Line::styled(text, style))
+
+                    // columns: on-now marker, favorite dot, time, genre dot, title
+                    let favorite = if favs.contains(&p.title) {
+                        Span::styled("●", Style::new().fg(parse_color(&ui.favorite_color)))
+                    } else {
+                        Span::raw(" ")
+                    };
+                    let genre = match ui.genre_color(&p.genres) {
+                        Some(color) => Span::styled("●", Style::new().fg(parse_color(color))),
+                        None => Span::raw(" "),
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(if is_now { ">" } else { " " }, style),
+                        favorite,
+                        Span::styled(format!(" {} ", p.start.format("%H:%M")), style),
+                        genre,
+                        Span::styled(format!(" {title}"), style),
+                    ]))
                 })
                 .collect(),
             None => Vec::new(),
@@ -728,5 +843,34 @@ fn draw_search(f: &mut Frame, area: Rect, search: &mut Search, guide: &Guide) {
     } else {
         let list = List::new(items).highlight_style(selected_style()).highlight_symbol("▸ ");
         f.render_stateful_widget(list, list_area, &mut search.state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_saved_channel_order_comes_first() {
+        let xml = r#"<tv>
+            <channel id="a"><display-name>A</display-name></channel>
+            <channel id="b"><display-name>B</display-name></channel>
+            <channel id="c"><display-name>C</display-name></channel>
+        </tv>"#;
+        let g = guide::parse(xml).unwrap();
+        let saved = vec!["c".to_string(), "gone".to_string(), "a".to_string(), "c".to_string()];
+        assert_eq!(build_order(&g, &saved), vec![2, 0, 1]);
+        assert_eq!(build_order(&g, &[]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn selections_stay_inside_their_list() {
+        let mut state = ListState::default();
+        step(&mut state, 3, 10);
+        assert_eq!(state.selected(), Some(2));
+        step(&mut state, 3, -10);
+        assert_eq!(state.selected(), Some(0));
+        step(&mut state, 0, 1);
+        assert_eq!(state.selected(), None);
     }
 }

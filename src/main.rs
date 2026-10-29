@@ -8,6 +8,9 @@ mod output;
 mod progress;
 mod stats;
 #[cfg(feature = "tui")]
+mod store;
+mod upload;
+#[cfg(feature = "tui")]
 mod tui;
 mod util;
 
@@ -55,6 +58,10 @@ const USAGE: &str = r##"Usage: rxmltv [options]
   --no-images         Don't write poster <icon> elements
   --retry-missing     Ask the server again for items it had no data for (otherwise skipped for 12 h)
   --refresh-channels  Download the channel list again instead of using the cached channels.xml
+  --post-command <c>  Run this shell command after a successful update ({file} is the output file,
+                      also in $RXMLTV_OUTPUT). It runs before the upload
+  --upload            Upload the output file after the update (server settings come from --config / --tui;
+                      needs the curl program). Exit code 3: the guide was written but the command or upload failed
   --config <file>     Read the settings from this file first (written by --tui); options given on the
                       command line then override it (--channels adds to the file's channels)
   --tui               Open the terminal UI: browse the generated guide and edit the updater settings.
@@ -81,6 +88,11 @@ pub struct Options {
     pub tui: bool,
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
     pub config_path: Option<String>,
+    /// A shell command to run after a successful update (`{file}` is the output file).
+    pub post_command: String,
+    pub upload: upload::UploadOptions,
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    pub ui: config::UiOptions,
 }
 
 impl Default for Options {
@@ -103,6 +115,9 @@ impl Default for Options {
             strip_hd_tv: false,
             tui: false,
             config_path: None,
+            post_command: String::new(),
+            upload: upload::UploadOptions::default(),
+            ui: config::UiOptions::default(),
         }
     }
 }
@@ -182,7 +197,7 @@ async fn main() -> ExitCode {
     }
 
     tokio::select! {
-        result = run(opts) => match result {
+        result = run_all(opts) => match result {
             Ok(code) => ExitCode::from(code),
             Err(e) => {
                 eprintln!("\nFatal: {e}");
@@ -309,6 +324,8 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--no-images" => o.no_images = true,
             "--retry-missing" => o.retry_missing = true,
             "--refresh-channels" => o.refresh_channels = true,
+            "--upload" => o.upload.enabled = true,
+            "--post-command" => o.post_command = take_value(name, inline, args, &mut i)?,
             "--strip-hd-tv" => o.strip_hd_tv = true,
             "--tui" => o.tui = true,
             "--config" => {
@@ -732,6 +749,62 @@ pub fn channel_catalog(raw: &[RawChannel], strip: bool) -> Vec<CatalogEntry> {
 }
 
 // ---------- run ----------
+
+/// The update, then (if it went well) the post-update command and the upload.
+async fn run_all(opts: Options) -> Result<u8, BoxError> {
+    let post = !opts.list_groups && !opts.list_channels;
+    let copy = opts.clone();
+    let code = run(opts).await?;
+    if code != 0 || !post {
+        return Ok(code);
+    }
+    after_update(&copy).await
+}
+
+/// Exit code 0 when everything went well, 3 when the guide was written but the command or upload failed.
+async fn after_update(opts: &Options) -> Result<u8, BoxError> {
+    let command = opts.post_command.trim();
+    if command.is_empty() && !opts.upload.enabled {
+        return Ok(0);
+    }
+    let file = std::path::absolute(&opts.output)?;
+    let mut failed = false;
+
+    if !command.is_empty() {
+        progress::info(format!("Running: {command}"));
+        match upload::run_command(command, &file, |line| progress::info(format!("  {line}"))).await {
+            Ok(()) => progress::info("The command finished."),
+            Err(e) => {
+                progress::warn(format!("Error: {e}"));
+                failed = true;
+            }
+        }
+    }
+
+    if opts.upload.enabled {
+        if failed {
+            progress::info("Not uploading, because the command failed.");
+        } else {
+            let mut last = -100.0f64;
+            let result = upload::upload(&opts.upload, &file, |event| match event {
+                upload::Event::Log(text) => progress::info(text),
+                upload::Event::Progress(percent) => {
+                    if percent - last >= 10.0 || (percent >= 100.0 && last < 100.0) {
+                        last = percent;
+                        progress::info(format!("Upload {percent:.0}%"));
+                    }
+                }
+            })
+            .await;
+            if let Err(e) = result {
+                progress::warn(format!("Error: the upload failed: {e}"));
+                failed = true;
+            }
+        }
+    }
+
+    Ok(if failed { 3 } else { 0 })
+}
 
 /// Spawned channel tasks keep running when their handle is dropped. This aborts them when `run` is
 /// cancelled (Ctrl+C on the command line, "cancel" in the terminal UI), so nothing keeps downloading.

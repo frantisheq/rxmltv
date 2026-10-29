@@ -7,12 +7,12 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Gauge, Paragraph, Wrap};
+use ratatui::widgets::{Block, Paragraph, Wrap};
 use ratatui::Frame;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
 
-use super::Action;
+use super::{progress_line, Action};
 use crate::{config, progress, stats, Options};
 
 enum State {
@@ -71,7 +71,7 @@ impl UpdateTab {
         std::thread::spawn(move || {
             let result = handle.block_on(async move {
                 tokio::select! {
-                    r = crate::run(opts) => r.map_err(|e| e.to_string()),
+                    r = crate::run_all(opts) => r.map_err(|e| e.to_string()),
                     _ = cancel_rx => Err("Cancelled.".to_string()),
                 }
             });
@@ -99,7 +99,7 @@ impl UpdateTab {
         }
     }
 
-    /// Called regularly. Some(true) when an update has just finished successfully.
+    /// Called regularly. Some(true) when an update has just written a guide that should be reloaded.
     pub fn poll(&mut self) -> Option<bool> {
         let received = match &self.rx {
             Some(rx) => match rx.try_recv() {
@@ -115,15 +115,24 @@ impl UpdateTab {
             State::Running { started, .. } => started.elapsed(),
             _ => Duration::ZERO,
         };
+        let received_code = match &received {
+            Some(Ok(code)) => Some(*code),
+            _ => None,
+        };
         let (ok, text) = match received {
             Some(Ok(0)) => (true, "Finished.".to_string()),
             Some(Ok(1)) => (false, "Nothing was written: see the log.".to_string()),
+            Some(Ok(3)) => {
+                (false, "The guide was written, but the command or the upload failed: see the log.".to_string())
+            }
             Some(Ok(code)) => (false, format!("Stopped with exit code {code}.")),
             Some(Err(message)) => (false, message),
             None => (false, String::new()),
         };
+        // the guide file is fine after a failed command or upload too, so it is reloaded then as well
+        let reload = ok || matches!(received_code, Some(3));
         self.state = State::Done { ok, text, elapsed };
-        Some(ok)
+        Some(reload)
     }
 
     pub fn draw(&self, f: &mut Frame, area: Rect, o: &Options) {
@@ -172,14 +181,10 @@ impl UpdateTab {
             };
             ((snap.done as f64 / snap.total as f64).clamp(0.0, 1.0), label)
         };
-        f.render_widget(
-            Gauge::default()
-                .block(Block::bordered().title(" Progress "))
-                .gauge_style(Style::new().fg(Color::Green))
-                .ratio(ratio)
-                .label(label),
-            gauge_area,
-        );
+        let block = Block::bordered().title(" Progress ");
+        let inner = block.inner(gauge_area);
+        f.render_widget(block, gauge_area);
+        f.render_widget(Paragraph::new(progress_line(inner.width as usize, ratio, &label)), inner);
 
         let [cache, downloaded, no_data, failed] = stats::counts();
         f.render_widget(

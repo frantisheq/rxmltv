@@ -56,6 +56,12 @@ impl Input {
         true
     }
 
+    /// Like `spans`, but every character shows as `*` (for passwords).
+    pub fn masked_spans(&self, width: usize) -> Vec<Span<'static>> {
+        let hidden = Input { chars: vec!['*'; self.chars.len()], cursor: self.cursor };
+        hidden.spans(width)
+    }
+
     /// The text with the cursor drawn as an inverted character, scrolled so the cursor stays inside `width`.
     pub fn spans(&self, width: usize) -> Vec<Span<'static>> {
         let width = width.max(2);

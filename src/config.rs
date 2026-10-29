@@ -8,10 +8,89 @@ use std::io;
 use std::path::Path;
 
 use crate::groups::normalize;
+use crate::upload::Protocol;
 use crate::util::with_suffix;
 use crate::{ChannelRequest, Options};
 
 pub const DEFAULT_PATH: &str = "rxmltv.conf";
+
+// ---------- colours (for the terminal UI's dots) ----------
+
+pub const COLOR_NAMES: [&str; 21] = [
+    "black", "red", "green", "yellow", "blue", "magenta", "cyan", "gray", "darkgray", "lightred", "lightgreen",
+    "lightyellow", "lightblue", "lightmagenta", "lightcyan", "white", "orange", "pink", "purple", "brown", "teal",
+];
+
+/// A colour name from COLOR_NAMES, or #rrggbb.
+pub fn valid_color(text: &str) -> bool {
+    let t = text.trim().to_ascii_lowercase();
+    if COLOR_NAMES.contains(&t.as_str()) {
+        return true;
+    }
+    t.len() == 7 && t.starts_with('#') && t[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// A genre keyword and the colour of its dot. The keyword is matched (without diacritics, any case) against
+/// the programme's categories.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenreColor {
+    pub keyword: String,
+    pub color: String,
+}
+
+/// How the terminal UI looks.
+#[derive(Clone, Debug)]
+pub struct UiOptions {
+    pub show_quality: bool,
+    pub show_new: bool,
+    pub show_rerun: bool,
+    pub favorite_color: String,
+    /// The first rule that matches wins.
+    pub genre_colors: Vec<GenreColor>,
+}
+
+impl Default for UiOptions {
+    fn default() -> Self {
+        let rule = |keyword: &str, color: &str| GenreColor { keyword: keyword.to_string(), color: color.to_string() };
+        UiOptions {
+            show_quality: true,
+            show_new: true,
+            show_rerun: true,
+            favorite_color: "orange".to_string(),
+            genre_colors: vec![
+                rule("serial", "blue"),
+                rule("series", "blue"),
+                rule("film", "red"),
+                rule("movie", "red"),
+                rule("zpravy", "yellow"),
+                rule("news", "yellow"),
+                rule("sport", "green"),
+                rule("dokument", "cyan"),
+                rule("documentar", "cyan"),
+                rule("deti", "magenta"),
+                rule("children", "magenta"),
+                rule("kids", "magenta"),
+                rule("hudba", "lightblue"),
+                rule("music", "lightblue"),
+                rule("zabav", "gray"),
+                rule("entertain", "gray"),
+            ],
+        }
+    }
+}
+
+impl UiOptions {
+    /// The dot colour for a programme whose categories, normalized and joined, are `genres`.
+    pub fn genre_color(&self, genres: &str) -> Option<&str> {
+        self.genre_colors
+            .iter()
+            .find(|g| {
+                let keyword = normalize(&g.keyword);
+                !keyword.is_empty() && genres.contains(&keyword)
+            })
+            .map(|g| g.color.as_str())
+    }
+}
 
 fn at(line: usize, message: String) -> String {
     format!("line {line}: {message}")
@@ -33,6 +112,7 @@ pub fn load(path: &Path) -> Result<Options, String> {
 /// One `key = value` per line; `#` starts a comment line. `channel` may repeat.
 pub fn parse(text: &str) -> Result<Options, String> {
     let mut o = Options::default();
+    let mut genres_replaced = false; // the first genre_color line replaces the built-in rules
 
     for (index, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
         let number = index + 1;
@@ -78,6 +158,57 @@ pub fn parse(text: &str) -> Result<Options, String> {
             "no_images" => o.no_images = flag("no_images")?,
             "retry_missing" => o.retry_missing = flag("retry_missing")?,
             "refresh_channels" => o.refresh_channels = flag("refresh_channels")?,
+            "show_quality" => o.ui.show_quality = flag("show_quality")?,
+            "show_new" => o.ui.show_new = flag("show_new")?,
+            "show_rerun" => o.ui.show_rerun = flag("show_rerun")?,
+            "favorite_color" => {
+                if !valid_color(value) {
+                    return Err(at(number, format!("\"{value}\" is not a colour (a name like red, or #rrggbb).")));
+                }
+                o.ui.favorite_color = value.to_string();
+            }
+            "genre_colors" => {
+                // "none" means no rules at all
+                o.ui.genre_colors.clear();
+                genres_replaced = true;
+            }
+            "genre_color" => {
+                let Some((keyword, color)) = value.split_once('=') else {
+                    return Err(at(number, "expected \"genre_color = keyword = colour\".".to_string()));
+                };
+                let (keyword, color) = (keyword.trim(), color.trim());
+                if keyword.is_empty() || !valid_color(color) {
+                    return Err(at(number, format!("\"{value}\": needs a keyword and a colour (red, #rrggbb ...).")));
+                }
+                if !genres_replaced {
+                    o.ui.genre_colors.clear();
+                    genres_replaced = true;
+                }
+                o.ui.genre_colors.push(GenreColor { keyword: keyword.to_string(), color: color.to_string() });
+            }
+            "post_command" => o.post_command = value.to_string(),
+            "upload_after_update" => o.upload.enabled = flag("upload_after_update")?,
+            "upload_protocol" => {
+                o.upload.protocol = Protocol::parse(value)
+                    .ok_or_else(|| at(number, "upload_protocol must be ftp, ftps, sftp, webdav or webdavs.".to_string()))?;
+            }
+            "upload_host" => o.upload.host = value.to_string(),
+            "upload_port" => {
+                o.upload.port = if value.is_empty() {
+                    None
+                } else {
+                    Some(value.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| {
+                        at(number, "upload_port must be a number from 1 to 65535.".to_string())
+                    })?)
+                };
+            }
+            "upload_user" => o.upload.username = value.to_string(),
+            "upload_password" => o.upload.password = value.to_string(),
+            "upload_folder" => o.upload.folder = value.to_string(),
+            "upload_name" => o.upload.remote_name = value.to_string(),
+            "upload_key" => o.upload.key_file = value.to_string(),
+            "upload_key_passphrase" => o.upload.key_passphrase = value.to_string(),
+            "upload_insecure" => o.upload.insecure = flag("upload_insecure")?,
             other => return Err(at(number, format!("unknown setting \"{other}\"."))),
         }
     }
@@ -111,6 +242,33 @@ pub fn to_text(o: &Options) -> String {
     let _ = writeln!(s, "no_images = {}", o.no_images);
     let _ = writeln!(s, "retry_missing = {}", o.retry_missing);
     let _ = writeln!(s, "refresh_channels = {}", o.refresh_channels);
+
+    let _ = writeln!(s, "\n# Terminal UI");
+    let _ = writeln!(s, "show_quality = {}", o.ui.show_quality);
+    let _ = writeln!(s, "show_new = {}", o.ui.show_new);
+    let _ = writeln!(s, "show_rerun = {}", o.ui.show_rerun);
+    let _ = writeln!(s, "favorite_color = {}", o.ui.favorite_color);
+    if o.ui.genre_colors.is_empty() {
+        let _ = writeln!(s, "genre_colors = none");
+    }
+    for g in &o.ui.genre_colors {
+        let _ = writeln!(s, "genre_color = {} = {}", g.keyword, g.color);
+    }
+
+    let _ = writeln!(s, "\n# After an update. {{file}} in the command is the output file.");
+    let _ = writeln!(s, "post_command = {}", o.post_command);
+    let _ = writeln!(s, "\n# Upload (needs curl). Leave upload_password empty to use $RXMLTV_UPLOAD_PASSWORD.");
+    let _ = writeln!(s, "upload_after_update = {}", o.upload.enabled);
+    let _ = writeln!(s, "upload_protocol = {}", o.upload.protocol.name());
+    let _ = writeln!(s, "upload_host = {}", o.upload.host);
+    let _ = writeln!(s, "upload_port = {}", o.upload.port.map(|p| p.to_string()).unwrap_or_default());
+    let _ = writeln!(s, "upload_user = {}", o.upload.username);
+    let _ = writeln!(s, "upload_password = {}", o.upload.password);
+    let _ = writeln!(s, "upload_folder = {}", o.upload.folder);
+    let _ = writeln!(s, "upload_name = {}", o.upload.remote_name);
+    let _ = writeln!(s, "upload_key = {}", o.upload.key_file);
+    let _ = writeln!(s, "upload_key_passphrase = {}", o.upload.key_passphrase);
+    let _ = writeln!(s, "upload_insecure = {}", o.upload.insecure);
     s
 }
 
@@ -121,10 +279,16 @@ pub fn save(path: &Path, o: &Options) -> io::Result<()> {
     }
     let tmp = with_suffix(path, ".tmp");
     fs::write(&tmp, to_text(o))?;
+    #[cfg(unix)]
+    if !o.upload.password.is_empty() || !o.upload.key_passphrase.is_empty() {
+        // the file holds a password: only its owner may read it
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+    }
     fs::rename(&tmp, path)
 }
 
-fn quote(s: &str) -> String {
+pub(crate) fn quote(s: &str) -> String {
     let safe = !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "_-./:=,+@%".contains(c));
     if safe {
         s.to_string()
@@ -163,6 +327,12 @@ pub fn command_line(o: &Options) -> String {
             })
             .collect();
         parts.push(format!("--channels {}", quote(&list.join(","))));
+    }
+    if o.upload.enabled {
+        parts.push("--upload".to_string());
+    }
+    if !o.post_command.trim().is_empty() {
+        parts.push(format!("--post-command {}", quote(o.post_command.trim())));
     }
     for (on, flag) in [
         (o.clean_cache, "--clean-cache"),
@@ -336,5 +506,74 @@ mod tests {
         assert_eq!(selection_summary(&o), "groups cz");
         o.channels = vec![ChannelRequest { id: "en-bbc-9".into(), new_id: None }];
         assert_eq!(selection_summary(&o), "groups cz + 1 channel(s)");
+    }
+
+    #[test]
+    fn ui_and_upload_settings_survive_a_round_trip() {
+        let mut o = Options::default();
+        o.ui.show_rerun = false;
+        o.ui.favorite_color = "#ff8800".to_string();
+        o.ui.genre_colors = vec![GenreColor { keyword: "sport".into(), color: "green".into() }];
+        o.post_command = "cp {file} /srv/epg.xml".to_string();
+        o.upload.enabled = true;
+        o.upload.protocol = Protocol::Sftp;
+        o.upload.host = "example.com".to_string();
+        o.upload.port = Some(2222);
+        o.upload.username = "jan".to_string();
+        o.upload.folder = "/var/www/epg".to_string();
+        o.upload.key_file = "/home/jan/.ssh/id_ed25519".to_string();
+        o.upload.insecure = true;
+
+        let back = parse(&to_text(&o)).unwrap();
+        assert!(!back.ui.show_rerun && back.ui.show_new);
+        assert_eq!(back.ui.favorite_color, "#ff8800");
+        assert_eq!(back.ui.genre_colors, o.ui.genre_colors);
+        assert_eq!(back.post_command, o.post_command);
+        assert!(back.upload.enabled && back.upload.insecure);
+        assert_eq!(back.upload.protocol, Protocol::Sftp);
+        assert_eq!(back.upload.port, Some(2222));
+        assert_eq!(back.upload.key_file, o.upload.key_file);
+    }
+
+    #[test]
+    fn genre_rules_can_be_emptied_and_default_otherwise() {
+        assert!(!parse("days = 1").unwrap().ui.genre_colors.is_empty());
+        let mut o = Options::default();
+        o.ui.genre_colors.clear();
+        assert!(parse(&to_text(&o)).unwrap().ui.genre_colors.is_empty());
+    }
+
+    #[test]
+    fn bad_ui_and_upload_values_are_reported() {
+        assert!(parse("favorite_color = chartreuse").is_err());
+        assert!(parse("genre_color = sport").is_err());
+        assert!(parse("genre_color = sport = nope").is_err());
+        assert!(parse("upload_protocol = scp").is_err());
+        assert!(parse("upload_port = 70000").is_err());
+        assert_eq!(parse("upload_port =").unwrap().upload.port, None);
+    }
+
+    #[test]
+    fn colours_are_checked() {
+        assert!(valid_color("Red"));
+        assert!(valid_color("#00FFaa"));
+        assert!(!valid_color("#00ffa"));
+        assert!(!valid_color("reddish"));
+    }
+
+    #[test]
+    fn genres_pick_the_first_matching_rule() {
+        let ui = UiOptions::default();
+        assert_eq!(ui.genre_color("series akcni drama"), Some("blue"));
+        assert_eq!(ui.genre_color("zabava"), Some("gray"));
+        assert_eq!(ui.genre_color("something else"), None);
+    }
+
+    #[test]
+    fn upload_and_command_show_in_the_command_line() {
+        let mut o = Options::default();
+        o.upload.enabled = true;
+        o.post_command = "cp {file} /srv/epg.xml".to_string();
+        assert_eq!(command_line(&o), "rxmltv --upload --post-command 'cp {file} /srv/epg.xml'");
     }
 }

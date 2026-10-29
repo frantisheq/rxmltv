@@ -15,6 +15,10 @@ use crate::util::{child_value, is_el, value};
 
 pub struct Guide {
     pub channels: Vec<GuideChannel>,
+    /// Normalized title -> every (channel, programme) with that title, earliest first. For favorites.
+    pub by_title: HashMap<String, Vec<(usize, usize)>>,
+    /// The most common categories (name, number of programmes), for the genre colour editor.
+    pub top_categories: Vec<(String, usize)>,
     /// Every local date on which something starts, ascending.
     pub dates: Vec<NaiveDate>,
     pub programme_count: usize,
@@ -23,6 +27,8 @@ pub struct Guide {
 pub struct GuideChannel {
     pub id: String,
     pub name: String,
+    /// Upper-case country code from the id ("CZ" for "cz-ct1-2"), or empty.
+    pub country: String,
     /// Lower-case, diacritics removed: name and id, for the channel filter.
     pub search: String,
     /// Sorted by start time.
@@ -49,23 +55,48 @@ pub struct GuideProgramme {
     pub rerun: bool,
     /// Lower-case, diacritics removed: title and sub-title, for the search.
     pub search: String,
+    /// Lower-case, diacritics removed: the categories joined, for the genre colours.
+    pub genres: String,
 }
 
 impl GuideProgramme {
-    /// Short flags for the programme list: NEW, RERUN, HDTV...
+    /// Short flags: NEW, RERUN, HDTV...
     pub fn tags(&self) -> Vec<String> {
+        self.tags_shown(true, true, true)
+    }
+
+    /// The same, leaving out the kinds that are switched off.
+    pub fn tags_shown(&self, quality: bool, new: bool, rerun: bool) -> Vec<String> {
         let mut tags = Vec::new();
-        if self.premiere {
+        if new && self.premiere {
             tags.push("NEW".to_string());
         }
-        if self.rerun {
+        if rerun && self.rerun {
             tags.push("RERUN".to_string());
         }
-        if let Some(quality) = &self.quality {
-            tags.push(quality.clone());
+        if quality {
+            if let Some(q) = &self.quality {
+                tags.push(q.clone());
+            }
         }
         tags
     }
+}
+
+/// "CZ" for the id "cz-ct1-2" or "ct1.cz"; empty when the id has no recognisable country part.
+pub fn country_code(id: &str) -> String {
+    let is_code = |s: &str| (2..=3).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphabetic());
+    if let Some((prefix, _)) = id.split_once('-') {
+        if is_code(prefix) {
+            return prefix.to_ascii_uppercase();
+        }
+    }
+    if let Some((_, suffix)) = id.rsplit_once('.') {
+        if is_code(suffix) {
+            return suffix.to_ascii_uppercase();
+        }
+    }
+    String::new()
 }
 
 impl GuideChannel {
@@ -86,6 +117,11 @@ impl GuideChannel {
 }
 
 impl Guide {
+    /// Where the programmes with this normalized title are on, earliest first.
+    pub fn airings(&self, key: &str) -> &[(usize, usize)] {
+        self.by_title.get(key).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
     /// (channel, programme) positions of programmes whose title matches, earliest first.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(usize, usize)> {
         let q = normalize(query);
@@ -153,8 +189,9 @@ pub fn parse(text: &str) -> Result<Guide, String> {
         let id = node.attribute("id").unwrap_or("").to_string();
         let name = child_value(node, "display-name").and_then(non_blank).unwrap_or_else(|| id.clone());
         let search = normalize(&format!("{name} {id}"));
+        let country = country_code(&id);
         index.insert(id.clone(), channels.len());
-        channels.push(GuideChannel { id, name, search, programmes: Vec::new() });
+        channels.push(GuideChannel { id, name, country, search, programmes: Vec::new() });
     }
 
     let mut programme_count = 0usize;
@@ -173,7 +210,25 @@ pub fn parse(text: &str) -> Result<Guide, String> {
         channel.programmes.sort_by_key(|p| p.start);
     }
 
-    Ok(Guide { channels, dates: dates.into_iter().collect(), programme_count })
+    let mut by_title: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+    let mut category_counts: HashMap<String, (String, usize)> = HashMap::new();
+    for (c, channel) in channels.iter().enumerate() {
+        for (p, programme) in channel.programmes.iter().enumerate() {
+            by_title.entry(normalize(&programme.title)).or_default().push((c, p));
+            for category in &programme.categories {
+                let entry = category_counts.entry(normalize(category)).or_insert_with(|| (category.clone(), 0));
+                entry.1 += 1;
+            }
+        }
+    }
+    for list in by_title.values_mut() {
+        list.sort_by_key(|&(c, p)| channels[c].programmes[p].start);
+    }
+    let mut top_categories: Vec<(String, usize)> = category_counts.into_values().collect();
+    top_categories.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    top_categories.truncate(40);
+
+    Ok(Guide { channels, by_title, top_categories, dates: dates.into_iter().collect(), programme_count })
 }
 
 fn programme_from(node: Node, start: DateTime<FixedOffset>) -> GuideProgramme {
@@ -198,6 +253,7 @@ fn programme_from(node: Node, start: DateTime<FixedOffset>) -> GuideProgramme {
         premiere: false,
         rerun: false,
         search,
+        genres: String::new(),
     };
 
     for c in node.children().filter(|c| c.is_element()) {
@@ -230,6 +286,7 @@ fn programme_from(node: Node, start: DateTime<FixedOffset>) -> GuideProgramme {
         }
     }
 
+    p.genres = normalize(&p.categories.join(" "));
     p
 }
 
@@ -311,6 +368,44 @@ mod tests {
         assert_eq!(hits, vec![(0, 1)]);
         assert_eq!(g.search("", 10), Vec::<(usize, usize)>::new());
         assert_eq!(g.search("rann", 10), vec![(1, 0)]);
+    }
+
+    #[test]
+    fn titles_are_indexed_for_favorites() {
+        let g = parse(SAMPLE).unwrap();
+        assert_eq!(g.airings("zpravy"), &[(0, 0)]);
+        assert_eq!(g.airings("vecer s hvezdami"), &[(0, 1)]);
+        assert!(g.airings("nothing").is_empty());
+    }
+
+    #[test]
+    fn genres_and_top_categories_are_collected() {
+        let g = parse(SAMPLE).unwrap();
+        assert_eq!(g.channels[0].programmes[1].genres, "zabava");
+        assert_eq!(g.top_categories, vec![("Zábava".to_string(), 1)]);
+    }
+
+    #[test]
+    fn country_codes_come_from_the_id() {
+        assert_eq!(country_code("cz-ct1-2"), "CZ");
+        assert_eq!(country_code("sk-markiza-3"), "SK");
+        assert_eq!(country_code("ct1.cz"), "CZ");
+        assert_eq!(country_code("nova"), "");
+        assert_eq!(country_code("bbcone-hd"), "");
+        assert_eq!(g_country(), "CZ");
+    }
+
+    fn g_country() -> String {
+        parse(SAMPLE).unwrap().channels[0].country.clone()
+    }
+
+    #[test]
+    fn tags_can_be_hidden() {
+        let g = parse(SAMPLE).unwrap();
+        let p = &g.channels[0].programmes[1];
+        assert_eq!(p.tags_shown(true, true, true), vec!["NEW".to_string(), "HDTV".to_string()]);
+        assert_eq!(p.tags_shown(false, true, true), vec!["NEW".to_string()]);
+        assert!(p.tags_shown(false, false, false).is_empty());
     }
 
     #[test]

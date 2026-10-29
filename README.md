@@ -54,6 +54,8 @@ rxmltv [options]
 | `--no-images` | Don't write programme poster `<icon>` elements |
 | `--config <file>` | Read the settings from a file first (written by `--tui`); options on the command line override it, `--channels` adds to the file's channels |
 | `--tui` | Open the terminal UI (see below) |
+| `--post-command <cmd>` | Run a shell command after a successful update; `{file}` is the output file |
+| `--upload` | Upload the output file after the update (server settings come from `--config` / `--tui`; needs `curl`) |
 | `--refresh-channels` | Download the channel list again instead of using the cached `channels.xml`, which is otherwise kept forever (`--clean-cache` does not touch it). If the download fails, the run stops; the old copy is already removed, so run it again |
 | `--retry-missing` | Ask the server again for items it had no data for (otherwise skipped for 12 hours) |
 | `-h`, `--help` | Show help |
@@ -118,19 +120,31 @@ rxmltv --tui --config my.conf   # use another settings file
 
 ![The Guide tab: channels, one day of programmes, and details](docs/tui-guide.jpg)
 
+(The screenshots show an earlier version: the programme list now also has the favorite and genre dot columns and the channel list a country code column.)
+
 ![The Settings tab: the updater's options as a menu](docs/tui-settings.jpg)
 
-Three tabs (`1`, `2`, `3` or F1-F3; `?` shows all keys; `q` quits):
+Five tabs (`1`-`5` or F1-F5; `?` shows all keys; `q` quits):
 
-- **Guide**: browses the generated XMLTV file (`--output`, plain or `.gz`). Channels on the left, one day's
-  programmes on the right (what is on now is marked), details below. `Tab` changes pane, `←`/`→` change day,
+- **Guide**: browses the generated XMLTV file (`--output`, plain or `.gz`). Channels (with their upper-case country
+  code) on the left, one day's programmes on the right, details below. `Tab` changes pane, `←`/`→` change day,
   `n` jumps to now, `/` searches programme titles in every channel, `f` filters the channel list, `r` reloads.
+  - The programme list has columns: `>` for what is on now, a **favorite dot**, the time, a **genre dot**, the title.
+    The `HDTV`, `NEW` and `RERUN` tags after the title can be switched off in Settings.
+  - `*` adds or removes the selected show as a favorite (matched by title, ignoring case and diacritics).
+  - `K` / `J` (or Shift+Up / Shift+Down) move the selected channel up or down in the channel list. The order is
+    remembered in `rxmltv.order` next to the settings file (delete it to go back to the file's order).
+- **Favorites**: the favorite shows (kept in `rxmltv.favorites`) with their upcoming airings from the loaded guide.
+  `Enter` shows the next airing in the Guide, `a` adds a title by hand, `d` removes one.
 - **Settings**: the updater's options as a menu: days, output file, cache folder, parallel downloads, flags,
-  and a picker for channel groups and individual channels (with optional own XMLTV ids, like `--channels id=newid`).
-  The picker loads the channel list from the cache or the server (`R` fetches it again). `s` saves the settings.
-  The panel below shows the same settings as a command line and as `rxmltv --config <file>`.
-- **Update**: runs the update with a progress bar, file counters and log; `x` cancels. The guide reloads when it
-  finishes.
+  a picker for channel groups and one for individual channels (with optional own XMLTV ids, like
+  `--channels id=newid`; `R` fetches the channel list again), the display options (tags, favorite colour,
+  an editor for the genre dot colours: keyword and colour, first match wins, and it lists the genres found in your
+  guide), the command to run after an update, and the upload settings. `s` saves the settings. The panel below
+  shows the same settings as a command line and as `rxmltv --config <file>`.
+- **Update**: runs the update (then the command and the upload, if set) with a progress bar, file counters and log;
+  `x` cancels. The guide reloads when it finishes.
+- **Upload**: sends the output file to the server now, with a progress bar and log; `x` cancels.
 
 Run an update from cron with the saved settings, no terminal UI needed:
 
@@ -138,9 +152,34 @@ Run an update from cron with the saved settings, no terminal UI needed:
 30 4 * * * /usr/local/bin/rxmltv --config /etc/rxmltv.conf
 ```
 
-The settings file is plain text, one `key = value` per line (`days`, `output`, `cache_dir`, `concurrency`,
-`groups`, repeated `channel`, and the yes/no options `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
-`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`).
+#### After an update: command and upload
+
+Both work from the terminal UI and from the command line (`--post-command`, `--upload`, or the settings file).
+After a successful update rxmltv first runs the command, then uploads. If the command fails, the upload is skipped.
+If either fails, the guide is still written and the exit code is 3.
+
+- **Command**: run by the shell (`sh -c`, or `cmd /C` on Windows). `{file}` in it becomes the path of the output
+  file (quoted), which is also in the `RXMLTV_OUTPUT` environment variable. What it prints goes to the log.
+  Example: `--post-command 'xmltv-tool --in {file} --out /srv/epg/final.xml'`.
+- **Upload**: FTP, FTPS (FTP with TLS), SFTP (SSH) and WebDAV (`webdav` = http, `webdavs` = https), with user
+  name, password, port, folder, file name on the server, and for SFTP an SSH key file (chosen with a file browser in
+  the UI) and its passphrase. The transfer is done by the **`curl`** program, which must be installed (Windows 10+
+  has it). This keeps rxmltv free of TLS and SSH code. Secrets are given to curl on its standard input, never on its
+  command line.
+  - The password is stored in the settings file as plain text (the file gets mode 600 on Linux/macOS). Leave
+    it empty and set `RXMLTV_UPLOAD_PASSWORD` to keep it out of the file.
+  - A folder with a leading `/` is an absolute path (FTP, SFTP); otherwise it is relative to the login folder.
+    FTP and SFTP folders are created if missing; WebDAV folders must exist.
+  - "Skip certificate check" turns off TLS certificate verification (FTPS, https) and the SSH host key check (SFTP).
+    Without it, an SFTP server must be in your `known_hosts` (connect once with `ssh` or `sftp` to add it).
+
+The settings file is plain text, one `key = value` per line: `days`, `output`, `cache_dir`, `concurrency`,
+`groups`, repeated `channel`, the yes/no options `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
+`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, the display options `show_quality`,
+`show_new`, `show_rerun`, `favorite_color`, repeated `genre_color = keyword = colour`, and `post_command` and the
+`upload_*` settings (`upload_after_update`, `upload_protocol`, `upload_host`, `upload_port`, `upload_user`,
+`upload_password`, `upload_folder`, `upload_name`, `upload_key`, `upload_key_passphrase`, `upload_insecure`).
+Colours are names (`red`, `orange`, `lightblue` ...) or `#rrggbb`.
 
 The UI is a build feature that is on by default. `cargo build --release --no-default-features` leaves it out.
 
