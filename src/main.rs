@@ -1,8 +1,14 @@
+mod config;
 mod enrichment;
 mod fetcher;
 mod groups;
+#[cfg(feature = "tui")]
+mod guide;
 mod output;
+mod progress;
 mod stats;
+#[cfg(feature = "tui")]
+mod tui;
 mod util;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -48,6 +54,11 @@ const USAGE: &str = r##"Usage: rxmltv [options]
   --keep-empty-channels  Also write channels that have no programmes
   --no-images         Don't write poster <icon> elements
   --retry-missing     Ask the server again for items it had no data for (otherwise skipped for 12 h)
+  --refresh-channels  Download the channel list again instead of using the cached channels.xml
+  --config <file>     Read the settings from this file first (written by --tui); options given on the
+                      command line then override it (--channels adds to the file's channels)
+  --tui               Open the terminal UI: browse the generated guide and edit the updater settings.
+                      Settings are saved to rxmltv.conf, or to the --config file
   -h, --help          Show this help"##;
 
 #[derive(Debug, Clone)]
@@ -65,7 +76,35 @@ pub struct Options {
     pub keep_empty_channels: bool,
     pub no_images: bool,
     pub retry_missing: bool,
+    pub refresh_channels: bool,
     pub strip_hd_tv: bool,
+    pub tui: bool,
+    #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+    pub config_path: Option<String>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            days: 7,
+            clean_cache: false,
+            output: "xmltv.xml".to_string(),
+            cache_dir: "data/cache/".to_string(),
+            concurrency: 4,
+            groups: None,
+            channels: Vec::new(),
+            list_groups: false,
+            list_channels: false,
+            keep_title_numbers: false,
+            keep_empty_channels: false,
+            no_images: false,
+            retry_missing: false,
+            refresh_channels: false,
+            strip_hd_tv: false,
+            tui: false,
+            config_path: None,
+        }
+    }
 }
 
 /// A channel asked for with --channels / --channels-file: its XMLTV id and optionally a new id to write instead.
@@ -77,7 +116,7 @@ pub struct ChannelRequest {
 
 impl ChannelRequest {
     /// "cz-ct1-2", "cz-ct1-2 = ct1.cz" or "cz-ct1-2=ct1.cz". Anything else after the id is ignored.
-    fn parse(text: &str) -> Result<Self, String> {
+    pub(crate) fn parse(text: &str) -> Result<Self, String> {
         let text = text.trim();
         let end = text.find(|c: char| c.is_whitespace() || c == '=').unwrap_or(text.len());
         let id = &text[..end];
@@ -138,6 +177,10 @@ async fn main() -> ExitCode {
         }
     };
 
+    if opts.tui {
+        return start_tui(opts);
+    }
+
     tokio::select! {
         result = run(opts) => match result {
             Ok(code) => ExitCode::from(code),
@@ -151,6 +194,17 @@ async fn main() -> ExitCode {
             ExitCode::from(130)
         }
     }
+}
+
+#[cfg(feature = "tui")]
+fn start_tui(opts: Options) -> ExitCode {
+    tui::run(opts)
+}
+
+#[cfg(not(feature = "tui"))]
+fn start_tui(_opts: Options) -> ExitCode {
+    eprintln!("Error: this build has no terminal UI (it was built without the \"tui\" feature).");
+    ExitCode::from(2)
 }
 
 async fn shutdown_signal() {
@@ -188,7 +242,7 @@ fn take_value(name: &str, inline: Option<&str>, args: &[String], i: &mut usize) 
     Err(format!("{name} needs a value."))
 }
 
-fn parse_positive(name: &str, value: &str) -> Result<u32, String> {
+pub(crate) fn parse_positive(name: &str, value: &str) -> Result<u32, String> {
     if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
         if let Ok(n) = value.parse::<u32>() {
             if n > 0 {
@@ -199,22 +253,37 @@ fn parse_positive(name: &str, value: &str) -> Result<u32, String> {
     Err(format!("{name} must be a positive number."))
 }
 
+/// The file named by `--config`, or (with `--tui`) the default settings file if there is one.
+fn find_config(args: &[String]) -> Result<Option<String>, String> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--config" {
+            return match args.get(i + 1) {
+                Some(path) => Ok(Some(path.clone())),
+                None => Err("--config needs a value.".to_string()),
+            };
+        }
+        if let Some(path) = args[i].strip_prefix("--config=") {
+            return Ok(Some(path.to_string()));
+        }
+        i += 1;
+    }
+
+    if args.iter().any(|a| a == "--tui") && std::path::Path::new(config::DEFAULT_PATH).exists() {
+        return Ok(Some(config::DEFAULT_PATH.to_string()));
+    }
+    Ok(None)
+}
+
 fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
-    let mut o = Options {
-        days: 7,
-        clean_cache: false,
-        output: "xmltv.xml".to_string(),
-        cache_dir: "data/cache/".to_string(),
-        concurrency: 4,
-        groups: None,
-        channels: Vec::new(),
-        list_groups: false,
-        list_channels: false,
-        keep_title_numbers: false,
-        keep_empty_channels: false,
-        no_images: false,
-        retry_missing: false,
-        strip_hd_tv: false,
+    let wants_help = args.iter().any(|a| a == "-h" || a == "--help");
+    let mut o = match if wants_help { None } else { find_config(args)? } {
+        Some(path) => {
+            let mut loaded = config::load(std::path::Path::new(&path))?;
+            loaded.config_path = Some(path);
+            loaded
+        }
+        None => Options::default(),
     };
 
     let mut i = 0;
@@ -239,7 +308,12 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--keep-empty-channels" => o.keep_empty_channels = true,
             "--no-images" => o.no_images = true,
             "--retry-missing" => o.retry_missing = true,
+            "--refresh-channels" => o.refresh_channels = true,
             "--strip-hd-tv" => o.strip_hd_tv = true,
+            "--tui" => o.tui = true,
+            "--config" => {
+                take_value(name, inline, args, &mut i)?; // already applied by find_config
+            }
             "--groups" => {
                 let v = take_value(name, inline, args, &mut i)?;
                 let groups: Vec<String> = v
@@ -287,7 +361,8 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
 
 // ---------- channels ----------
 
-struct RawChannel {
+#[derive(Clone)]
+pub struct RawChannel {
     id: Option<String>,
     name: Option<String>,
     logo: Option<String>,
@@ -385,7 +460,7 @@ fn parse_channels(raw: &[RawChannel], groups: Option<&[String]>, channels: &[Cha
 
     for request in channels {
         if !found.contains(&request.id.to_lowercase()) {
-            eprintln!("Warning: channel \"{}\" not found (see --list-channels).", request.id);
+            progress::info(format!("Warning: channel \"{}\" not found (see --list-channels).", request.id));
         }
     }
 
@@ -401,7 +476,7 @@ fn warn_about_unknown_groups(raw: &[RawChannel], requested: Option<&[String]>) {
         .flat_map(|r| [normalize(&r.group), group_code(Some(&r.group))])
         .collect();
     for g in requested.iter().filter(|g| !available.contains(&normalize(g))) {
-        eprintln!("Warning: group \"{g}\" not found (see --list-groups).");
+        progress::info(format!("Warning: group \"{g}\" not found (see --list-groups)."));
     }
 }
 
@@ -600,7 +675,75 @@ fn format_duration(t: std::time::Duration) -> String {
     }
 }
 
+// ---------- channel catalog (for the terminal UI's channel picker) ----------
+
+const CHANNEL_LIST_URI: &str = "v5-tv.php?locale=cz";
+const CHANNEL_LIST_FILE: &str = "channels.xml";
+
+/// A channel as the picker shows it.
+#[cfg(feature = "tui")]
+pub struct CatalogEntry {
+    /// The XMLTV id, e.g. "cz-ct1-2" (after --strip-hd-tv, if asked for).
+    pub xml_id: String,
+    pub name: String,
+    /// The server's group name, e.g. "České".
+    pub group: String,
+    /// The short group code, e.g. "cz".
+    pub code: String,
+}
+
+/// Loads the server's channel list: from the cache, or from the server when `refresh` is set.
+#[cfg(feature = "tui")]
+pub async fn load_raw_channels(cache_dir: &str, refresh: bool) -> Result<Vec<RawChannel>, String> {
+    let dir = PathBuf::from(cache_dir);
+    fs::create_dir_all(&dir).map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+    let fetcher = Fetcher::new(&dir, 2, false).map_err(|e| e.to_string())?;
+    fetcher
+        .get(CHANNEL_LIST_URI, CHANNEL_LIST_FILE, refresh, parse_channel_list)
+        .await
+        .ok_or_else(|| "Could not load the channel list.".to_string())
+}
+
+/// Every channel in output order (the same order and ids as --list-channels).
+#[cfg(feature = "tui")]
+pub fn channel_catalog(raw: &[RawChannel], strip: bool) -> Vec<CatalogEntry> {
+    let mut raw: Vec<RawChannel> = raw.to_vec();
+    if strip {
+        strip_names(&mut raw);
+    }
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut items: Vec<(CatalogEntry, String)> = Vec::new(); // (entry, sort key)
+    for r in &raw {
+        let (Some(id), Some(name)) = (&r.id, &r.name) else { continue };
+        if !is_safe_id(id) || !seen.insert(id.clone()) {
+            continue;
+        }
+        let code = group_code(Some(&r.group));
+        let channel = Channel::new(id.clone(), name.clone(), None, code.clone());
+        items.push((
+            CatalogEntry { xml_id: channel.xml_id, name: name.clone(), group: r.group.clone(), code },
+            unidecode(name),
+        ));
+    }
+
+    items.sort_by(|a, b| a.0.code.cmp(&b.0.code).then_with(|| natural_cmp(&a.1, &b.1)));
+    items.into_iter().map(|(entry, _)| entry).collect()
+}
+
 // ---------- run ----------
+
+/// Spawned channel tasks keep running when their handle is dropped. This aborts them when `run` is
+/// cancelled (Ctrl+C on the command line, "cancel" in the terminal UI), so nothing keeps downloading.
+struct PendingTasks(VecDeque<(Arc<Channel>, JoinHandle<Vec<Programme>>)>);
+
+impl Drop for PendingTasks {
+    fn drop(&mut self) {
+        for (_, handle) in &self.0 {
+            handle.abort();
+        }
+    }
+}
 
 async fn run(opts: Options) -> Result<u8, BoxError> {
     let cache_dir = PathBuf::from(&opts.cache_dir);
@@ -615,8 +758,8 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
 
     let fetcher = Arc::new(Fetcher::new(&cache_dir, opts.concurrency, opts.retry_missing)?);
 
-    let Some(mut raw) = fetcher.get("v5-tv.php?locale=cz", "channels.xml", false, parse_channel_list).await else {
-        eprintln!("Could not load the channel list.");
+    let Some(mut raw) = fetcher.get(CHANNEL_LIST_URI, CHANNEL_LIST_FILE, opts.refresh_channels, parse_channel_list).await else {
+        progress::info("Could not load the channel list.");
         return Ok(1);
     };
 
@@ -638,7 +781,7 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
 
     let channels = parse_channels(&raw, opts.groups.as_deref(), &opts.channels);
     if channels.is_empty() {
-        eprintln!("No channels matched. Run with --list-groups to see the available groups.");
+        progress::info("No channels matched. Run with --list-groups to see the available groups.");
         return Ok(1);
     }
 
@@ -646,12 +789,13 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
     let mut xml_ids: HashSet<&str> = HashSet::new();
     for c in &channels {
         if !xml_ids.insert(c.xml_id.as_str()) {
-            eprintln!("Error: the XMLTV id \"{}\" is used by more than one channel.", c.xml_id);
+            progress::info(format!("Error: the XMLTV id \"{}\" is used by more than one channel.", c.xml_id));
             return Ok(1);
         }
     }
 
-    eprintln!("{} channels, {} day(s).", channels.len(), opts.days);
+    progress::info(format!("{} channels, {} day(s).", channels.len(), opts.days));
+    progress::begin(channels.len());
 
     let clock = Instant::now();
 
@@ -674,12 +818,12 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
 
         let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let window = std::cmp::max(8, std::cmp::max(opts.concurrency * 2, cpus * 2));
-        let mut pending: VecDeque<(Arc<Channel>, JoinHandle<Vec<Programme>>)> = VecDeque::new();
+        let mut pending = PendingTasks(VecDeque::new());
         let (mut next, mut done) = (0usize, 0usize);
         let mut buffer = String::new();
 
-        while next < channels.len() || !pending.is_empty() {
-            while next < channels.len() && pending.len() < window {
+        while next < channels.len() || !pending.0.is_empty() {
+            while next < channels.len() && pending.0.len() < window {
                 let ch = Arc::clone(&channels[next]);
                 next += 1;
 
@@ -689,11 +833,11 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
                 let handle = tokio::spawn(async move {
                     load_channel(&task_fetcher, &task_channel, today, days, tz).await
                 });
-                pending.push_back((ch, handle));
+                pending.0.push_back((ch, handle));
             }
 
             // Results are consumed in channel order, so the output is deterministic.
-            let Some((channel, handle)) = pending.pop_front() else { break };
+            let Some((channel, handle)) = pending.0.pop_front() else { break };
             let list = handle.await?;
 
             if !list.is_empty() || opts.keep_empty_channels {
@@ -711,26 +855,25 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
             }
 
             done += 1;
-            let line = format!("\r({done}/{}) {}", channels.len(), channel.name);
-            eprint!("{line:<70}");
+            progress::step(done, channels.len(), &channel.name);
         }
 
         writer.flush()?;
     }
 
-    eprintln!();
+    progress::end_steps();
 
     let started = Instant::now();
     output::assemble_output(&full, &output_tmp, &written, &programmes_tmp)?;
     stats::add_since(&stats::WRITE_NANOS, started);
 
-    eprintln!(
+    progress::info(format!(
         "Wrote {} programmes on {} channels to {} in {}.",
         stats::n0(programme_count as u64),
         written.len(),
         opts.output,
         format_duration(clock.elapsed())
-    );
+    ));
     stats::print();
     Ok(0)
 }
@@ -920,5 +1063,41 @@ mod tests {
         assert!(is_safe_id("ct1_HD-2"));
         assert!(!is_safe_id("../x"));
         assert!(!is_safe_id(""));
+    }
+
+    #[test]
+    fn config_and_tui_flags_are_parsed() {
+        let path = std::env::temp_dir().join(format!("rxmltv-test-conf-{}.conf", std::process::id()));
+        fs::write(&path, "days = 2\nconcurrency = 6\nchannel = cz-nova-2\n").unwrap();
+        let p = path.to_str().unwrap();
+
+        let o = parse_args(&args(&["--config", p, "--days", "5", "--channels", "sk-markiza-3", "--tui"]))
+            .unwrap()
+            .unwrap();
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(o.days, 5); // the command line wins over the file
+        assert_eq!(o.concurrency, 6);
+        assert_eq!(o.channels, requests(&["cz-nova-2", "sk-markiza-3"]));
+        assert!(o.tui);
+        assert_eq!(o.config_path.as_deref(), Some(p));
+    }
+
+    #[test]
+    fn a_missing_config_file_is_an_error() {
+        assert!(parse_args(&args(&["--config", "/nonexistent/rxmltv.conf"])).is_err());
+        assert!(parse_args(&args(&["--config"])).is_err());
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn catalog_matches_the_channel_listing() {
+        let raw = vec![raw_channel("2", "Nova HD", "České"), raw_channel("3", "Markíza", "Slovenské")];
+        let catalog = channel_catalog(&raw, false);
+        assert_eq!(catalog.len(), 2);
+        assert_eq!(catalog[0].xml_id, "cz-nova-hd-2");
+        assert_eq!(catalog[0].code, "cz");
+        assert_eq!(catalog[1].xml_id, "sk-markiza-3");
+        assert_eq!(channel_catalog(&raw, true)[0].xml_id, "cz-nova-2");
     }
 }

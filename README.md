@@ -52,6 +52,9 @@ rxmltv [options]
 | `--keep-title-numbers` | Keep `(3)`, `(2/6)` and roman season numbers in the title. Default: removed and written as `<episode-num>` |
 | `--keep-empty-channels` | Also write channels that have no programmes |
 | `--no-images` | Don't write programme poster `<icon>` elements |
+| `--config <file>` | Read the settings from a file first (written by `--tui`); options on the command line override it, `--channels` adds to the file's channels |
+| `--tui` | Open the terminal UI (see below) |
+| `--refresh-channels` | Download the channel list again instead of using the cached `channels.xml`, which is otherwise kept forever (`--clean-cache` does not touch it). If the download fails, the run stops; the old copy is already removed, so run it again |
 | `--retry-missing` | Ask the server again for items it had no data for (otherwise skipped for 12 hours) |
 | `-h`, `--help` | Show help |
 
@@ -105,6 +108,37 @@ Run it once or twice a day. For example with cron:
 > faster, as long as you keep the same `--cache-dir`. To speed up the first run, limit it with `--groups` or
 > `--channels`, use fewer `--days`, or raise `--concurrency` a little (be considerate to the server). It is safe to
 > interrupt with Ctrl+C and start again: files already downloaded are kept.
+
+### Terminal UI
+
+```sh
+rxmltv --tui                    # settings are read from and saved to ./rxmltv.conf
+rxmltv --tui --config my.conf   # use another settings file
+```
+
+Three tabs (`1`, `2`, `3` or F1-F3; `?` shows all keys; `q` quits):
+
+- **Guide**: browses the generated XMLTV file (`--output`, plain or `.gz`). Channels on the left, one day's
+  programmes on the right (what is on now is marked), details below. `Tab` changes pane, `←`/`→` change day,
+  `n` jumps to now, `/` searches programme titles in every channel, `f` filters the channel list, `r` reloads.
+- **Settings**: the updater's options as a menu: days, output file, cache folder, parallel downloads, flags,
+  and a picker for channel groups and individual channels (with optional own XMLTV ids, like `--channels id=newid`).
+  The picker loads the channel list from the cache or the server (`R` fetches it again). `s` saves the settings.
+  The panel below shows the same settings as a command line and as `rxmltv --config <file>`.
+- **Update**: runs the update with a progress bar, file counters and log; `x` cancels. The guide reloads when it
+  finishes.
+
+Run an update from cron with the saved settings, no terminal UI needed:
+
+```
+30 4 * * * /usr/local/bin/rxmltv --config /etc/rxmltv.conf
+```
+
+The settings file is plain text, one `key = value` per line (`days`, `output`, `cache_dir`, `concurrency`,
+`groups`, repeated `channel`, and the yes/no options `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
+`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`).
+
+The UI is a build feature that is on by default. `cargo build --release --no-default-features` leaves it out.
 
 ### Group codes
 

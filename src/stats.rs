@@ -43,28 +43,52 @@ pub fn n0(value: u64) -> String {
     out
 }
 
-pub fn print() {
-    eprintln!(
+/// The summary lines, as printed at the end of a run.
+pub fn summary_lines() -> Vec<String> {
+    let mut lines = vec![format!(
         "Files: {} from cache, {} downloaded, {} without data, {} failed.",
         n0(get(&CACHE_HITS)),
         n0(get(&DOWNLOADS)),
         n0(get(&NO_DATA)),
         n0(get(&FAILED))
-    );
+    )];
     let stale = get(&STALE);
     if stale > 0 {
-        eprintln!(
+        lines.push(format!(
             "Detail files that belonged to another programme: {} (fetched again), {} still wrong and ignored.",
             n0(stale),
             n0(get(&REJECTED))
-        );
+        ));
     }
-    eprintln!(
+    lines.push(format!(
         "Time summed over all threads: loading {}s, extracting {}s, writing {}s.",
         n0(seconds(&READ_NANOS)),
         n0(seconds(&EXTRACT_NANOS)),
         n0(seconds(&WRITE_NANOS))
-    );
+    ));
+    lines
+}
+
+pub fn print() {
+    for line in summary_lines() {
+        crate::progress::info(line);
+    }
+}
+
+/// Files from the cache, downloaded, without data, failed. Used by the terminal UI.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub fn counts() -> [u64; 4] {
+    [get(&CACHE_HITS), get(&DOWNLOADS), get(&NO_DATA), get(&FAILED)]
+}
+
+/// Starts the counters from zero again (the terminal UI can run several updates in one session).
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub fn reset() {
+    for counter in [
+        &CACHE_HITS, &DOWNLOADS, &NO_DATA, &FAILED, &STALE, &REJECTED, &READ_NANOS, &EXTRACT_NANOS, &WRITE_NANOS,
+    ] {
+        counter.store(0, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]

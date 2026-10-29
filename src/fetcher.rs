@@ -109,7 +109,7 @@ impl Fetcher {
                 Err(e) => {
                     if attempt == MAX_ATTEMPTS {
                         stats::inc(&stats::FAILED);
-                        eprintln!("\nWarning: giving up on {cache_file}: {e}");
+                        crate::progress::warn(format!("Warning: giving up on {cache_file}: {e}"));
                         return None;
                     }
                     tokio::time::sleep(Duration::from_millis(500 * u64::from(attempt))).await;
@@ -156,7 +156,7 @@ fn store(path: &Path, bytes: &[u8]) {
     let result = fs::write(&tmp, bytes).and_then(|_| fs::rename(&tmp, path));
     if let Err(e) = result {
         try_delete(&tmp);
-        eprintln!("\nWarning: could not write {}: {e}", path.display());
+        crate::progress::warn(format!("Warning: could not write {}: {e}", path.display()));
     }
 }
 
