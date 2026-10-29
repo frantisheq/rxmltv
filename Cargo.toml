@@ -1,15 +1,36 @@
 [package]
 name = "rxmltv"
-version = "0.1.5"
+version = "0.1.7"
 edition = "2021"
 rust-version = "1.80"
 description = "XMLTV/EPG generator (Rust port of the C# sharpxmltv)"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz = "0.10"
+deunicode = "1"
+encoding_rs = "0.8"
+flate2 = "1"
+html-escape = "0.2"
 regex = "1"
 reqwest = { version = "0.12", default-features = false }
 roxmltree = "0.20"
+ratatui = { version = "0.29", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 
 [features]
+# The terminal UI (`rxmltv --tui`): a guide browser and a settings menu. Pure Rust like everything else here;
+# build with `--no-default-features` for a smaller binary without it.
+default = ["tui"]
+tui = ["dep:ratatui"]
+
 # https support. The server is plain http://, so this is off by default and the binary is pure Rust
 # (no C code), which keeps cross-compiling to every platform simple. Enable it with `--features tls`
 # if the server ever starts redirecting to https.
+tls = ["reqwest/rustls-tls"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
