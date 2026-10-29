@@ -33,6 +33,7 @@ enum Item {
     NoImages,
     RetryMissing,
     RefreshChannels,
+    GuideLayout,
     ShowQuality,
     ShowNew,
     ShowRerun,
@@ -56,7 +57,7 @@ enum Item {
     PurgeCache,
 }
 
-const ITEMS: [Item; 35] = [
+const ITEMS: [Item; 36] = [
     Item::Days,
     Item::Output,
     Item::CacheDir,
@@ -71,6 +72,7 @@ const ITEMS: [Item; 35] = [
     Item::NoImages,
     Item::RetryMissing,
     Item::RefreshChannels,
+    Item::GuideLayout,
     Item::ShowQuality,
     Item::ShowNew,
     Item::ShowRerun,
@@ -111,6 +113,7 @@ impl Item {
             Item::NoImages => "No programme posters",
             Item::RetryMissing => "Retry missing items",
             Item::RefreshChannels => "Refresh channel list",
+            Item::GuideLayout => "Guide layout",
             Item::ShowQuality => "Show quality tag (HDTV)",
             Item::ShowNew => "Show NEW tag",
             Item::ShowRerun => "Show RERUN tag",
@@ -151,6 +154,7 @@ impl Item {
             Item::NoImages => "Do not write poster <icon> elements.",
             Item::RetryMissing => "Ask the server again for items it had no data for (normally skipped for 12 hours).",
             Item::RefreshChannels => "Download the channel list again instead of using the cached channels.xml (it is otherwise never refreshed).",
+            Item::GuideLayout => "list: channel list and one programme list. grid: one column per channel, like a newspaper listing, with the details below. Enter or Left/Right switch; v switches in the Guide.",
             Item::ShowQuality => "Show the quality tag (HDTV) after the show name in the Guide's programme list.",
             Item::ShowNew => "Show the NEW tag after the show name in the Guide's programme list.",
             Item::ShowRerun => "Show the RERUN tag after the show name in the Guide's programme list.",
@@ -297,6 +301,7 @@ fn value_text(item: Item, o: &Options) -> String {
             n => format!("{n} picked"),
         },
         Item::GenreColors => format!("{} rules", o.ui.genre_colors.len()),
+        Item::GuideLayout => (if o.ui.grid_layout { "grid (channels as columns)" } else { "list" }).to_string(),
         Item::UploadProtocol => o.upload.protocol.label().to_string(),
         Item::UploadPort => match o.upload.port {
             Some(port) => port.to_string(),
@@ -412,6 +417,10 @@ impl SettingsTab {
         self.dirty
     }
 
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     pub fn mark_saved(&mut self) {
         self.dirty = false;
     }
@@ -524,6 +533,7 @@ impl SettingsTab {
             Item::Days => o.days = (i64::from(o.days) + delta).clamp(1, 365) as u32,
             Item::Concurrency => o.concurrency = (o.concurrency as i64 + delta).clamp(1, 64) as usize,
             Item::UploadProtocol => o.upload.protocol = o.upload.protocol.step(delta as i32),
+            Item::GuideLayout => o.ui.grid_layout = !o.ui.grid_layout,
             _ => return,
         }
         self.dirty = true;
@@ -550,7 +560,7 @@ impl SettingsTab {
                 self.files = Some(FilePicker::open(&o.upload.key_file));
                 Action::None
             }
-            Item::UploadProtocol => {
+            Item::UploadProtocol | Item::GuideLayout => {
                 self.adjust(o, 1);
                 Action::None
             }

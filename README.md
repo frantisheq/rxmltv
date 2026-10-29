@@ -137,6 +137,10 @@ Five tabs (`1`-`5` or F1-F5; `?` shows all keys; `q` quits):
 - **Guide**: browses the generated XMLTV file (`--output`, plain or `.gz`). Channels (with their upper-case country
   code) on the left, one day's programmes on the right, details below. `Tab` changes pane, `←`/`→` change day,
   `n` jumps to now, `/` searches programme titles in every channel, `f` filters the channel list, `r` reloads.
+  - **Grid layout** (`v` switches, or Settings > Guide layout): one column per channel like a newspaper listing, with
+    the day's programmes (time and title) listed down each column and the details tab below. `←`/`→` pick the
+    channel, `↑`/`↓` the programme (the columns scroll together, so the same time stays level across channels),
+    `[`/`]` change day. Columns are at least 28 characters wide; as many as fit are shown.
   - The programme list has columns: `>` for what is on now, a **favorite dot**, the time, a **genre dot**, the title.
     The `HDTV`, `NEW` and `RERUN` tags after the title can be switched off in Settings.
   - `*` adds or removes the selected show as a favorite (matched by title, ignoring case and diacritics).
@@ -184,7 +188,7 @@ If either fails, the guide is still written and the exit code is 3.
 The settings file is plain text, one `key = value` per line: `days`, `output`, `cache_dir`, `concurrency`,
 `groups`, repeated `channel`, the yes/no options `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
 `keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, the display options `show_quality`,
-`show_new`, `show_rerun`, `favorite_color`, repeated `genre_color = keyword = colour`, and `post_command` and the
+`show_new`, `show_rerun`, `guide_layout` (`list` or `grid`), `favorite_color`, repeated `genre_color = keyword = colour`, and `post_command` and the
 `upload_*` settings (`upload_after_update`, `upload_protocol`, `upload_host`, `upload_port`, `upload_user`,
 `upload_password`, `upload_folder`, `upload_name`, `upload_key`, `upload_key_passphrase`, `upload_insecure`).
 Colours are names (`red`, `orange`, `lightblue` ...) or `#rrggbb`.

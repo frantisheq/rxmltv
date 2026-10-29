@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{NaiveDate, Utc};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
@@ -56,6 +56,12 @@ pub struct GuideTab {
     scroll: u16,
     max_scroll: u16,
     mode: Mode,
+    /// Channels as columns (the newspaper layout) instead of a channel list and a programme list.
+    grid: bool,
+    /// Grid: the time the columns are scrolled to (a timestamp); 0 shows each column from its first programme.
+    grid_top: i64,
+    /// Grid: position (in `visible`) of the leftmost column.
+    grid_first: usize,
 }
 
 /// Today's date where the guide is from.
@@ -83,6 +89,65 @@ fn selection(len: usize) -> ListState {
     let mut state = ListState::default();
     state.select(if len == 0 { None } else { Some(0) });
     state
+}
+
+/// The narrowest a grid column gets (borders included).
+const GRID_MIN_COLUMN: u16 = 28;
+/// Characters before the title in a grid entry: favorite dot, time, space, genre dot.
+const GRID_PREFIX: usize = 9;
+
+/// One programme in a grid column: its position in the channel's programmes, and its title wrapped to the column.
+struct GridEntry {
+    position: usize,
+    lines: Vec<String>,
+}
+
+/// Breaks text into lines of at most `width` characters, at spaces where possible.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_string();
+        while word.chars().count() > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            lines.push(word.chars().take(width).collect());
+            word = word.chars().skip(width).collect();
+        }
+        if current.is_empty() {
+            current = word;
+        } else if current.chars().count() + 1 + word.chars().count() <= width {
+            current.push(' ');
+            current.push_str(&word);
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current = word;
+        }
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// What a grid column shows: the programmes of `day` that have not ended before `top`, titles wrapped.
+fn column_entries(channel: &GuideChannel, day: NaiveDate, top: i64, text_width: usize, ui: &UiOptions) -> Vec<GridEntry> {
+    channel
+        .on(day)
+        .into_iter()
+        .filter(|&i| channel.end(i).map_or(true, |end| end.timestamp() > top))
+        .map(|i| {
+            let p = &channel.programmes[i];
+            let mut title = p.title.clone();
+            let tags = p.tags_shown(ui.show_quality, ui.show_new, ui.show_rerun);
+            if !tags.is_empty() {
+                title.push_str(&format!(" [{}]", tags.join(" ")));
+            }
+            GridEntry { position: i, lines: wrap_text(&title, text_width) }
+        })
+        .collect()
 }
 
 /// Channel positions in the saved order; channels that are not in the saved order follow, as in the file.
@@ -133,6 +198,9 @@ impl GuideTab {
             scroll: 0,
             max_scroll: 0,
             mode: Mode::Normal,
+            grid: false,
+            grid_top: 0,
+            grid_first: 0,
         }
     }
 
@@ -148,6 +216,17 @@ impl GuideTab {
         self.path = path;
     }
 
+    /// Switches between the list layout and the grid (columns) layout.
+    pub fn set_grid(&mut self, grid: bool) {
+        if self.grid != grid {
+            self.grid = grid;
+            self.grid_top = 0;
+            if grid && self.focus == Focus::Channels {
+                self.focus = Focus::Programmes; // the grid has no separate channel pane
+            }
+        }
+    }
+
     pub fn set_loading(&mut self) {
         self.loading = true;
     }
@@ -158,8 +237,11 @@ impl GuideTab {
 
     pub fn hints(&self) -> &'static str {
         match &self.mode {
+            Mode::Normal if self.grid => {
+                "←→ channel · ↑↓ programme · [ ] day · n now · v list · * favorite · K/J move channel · / search · ? help"
+            }
             Mode::Normal => {
-                "Tab pane · ↑↓ move · ←→ day · n now · * favorite · K/J move channel · / search · f filter · ? help"
+                "Tab pane · ↑↓ move · ←→ day · n now · v grid · * favorite · K/J move channel · / search · f filter · ? help"
             }
             Mode::Filter(_) => "type to filter the channels · Enter keep the filter · Esc clear it",
             Mode::Search(_) => "type to search · ↑↓ choose · Enter go to the programme · Esc close",
@@ -277,6 +359,10 @@ impl GuideTab {
 
     fn key_normal(&mut self, key: KeyEvent) -> Action {
         match key.code {
+            KeyCode::Tab | KeyCode::BackTab if self.grid => {
+                // the grid has two panes: the columns and the details
+                self.focus = if self.focus == Focus::Details { Focus::Programmes } else { Focus::Details };
+            }
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     Focus::Channels => Focus::Programmes,
@@ -300,9 +386,15 @@ impl GuideTab {
             KeyCode::Esc => {
                 self.focus = match self.focus {
                     Focus::Details => Focus::Programmes,
+                    _ if self.grid => Focus::Programmes,
                     _ => Focus::Channels,
                 }
             }
+            KeyCode::Char('v') => return Action::ToggleLayout,
+            KeyCode::Char('H') => return self.move_channel(-1),
+            KeyCode::Char('L') => return self.move_channel(1),
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => return self.move_channel(-1),
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => return self.move_channel(1),
             KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => return self.move_channel(-1),
             KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => return self.move_channel(1),
             KeyCode::Char('K') => return self.move_channel(-1),
@@ -318,8 +410,22 @@ impl GuideTab {
             KeyCode::PageDown => self.move_selection(10),
             KeyCode::Home | KeyCode::Char('g') => self.move_selection(-1_000_000),
             KeyCode::End | KeyCode::Char('G') => self.move_selection(1_000_000),
-            KeyCode::Left | KeyCode::Char('h') => self.move_day(-1),
-            KeyCode::Right | KeyCode::Char('l') => self.move_day(1),
+            KeyCode::Left | KeyCode::Char('h') => {
+                if self.grid {
+                    self.move_column(-1);
+                } else {
+                    self.move_day(-1);
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if self.grid {
+                    self.move_column(1);
+                } else {
+                    self.move_day(1);
+                }
+            }
+            KeyCode::Char('[') => self.move_day(-1),
+            KeyCode::Char(']') => self.move_day(1),
             KeyCode::Char('n') => self.go_now(),
             KeyCode::Char('r') => return Action::ReloadGuide,
             KeyCode::Char('/') => {
@@ -412,9 +518,37 @@ impl GuideTab {
         }
     }
 
+    /// Grid: selects the neighbouring channel, on the programme that is on at the same time.
+    fn move_column(&mut self, delta: i64) {
+        let at = self.selected_programme().map(|(_, p)| p.start.timestamp());
+        let before = self.channels.selected();
+        step(&mut self.channels, self.visible.len(), delta);
+        if self.channels.selected() != before {
+            match at {
+                Some(ts) => self.select_at_time(ts),
+                None => self.select_programme(),
+            }
+        }
+    }
+
+    /// Selects the programme of the selected channel and day that is on at `ts` (a timestamp).
+    fn select_at_time(&mut self, ts: i64) {
+        self.scroll = 0;
+        let list = self.day_list();
+        let position = match self.selected_channel() {
+            Some(channel) => list.iter().rposition(|&i| channel.programmes[i].start.timestamp() <= ts),
+            None => None,
+        };
+        let mut state = ListState::default();
+        if !list.is_empty() {
+            state.select(Some(position.unwrap_or(0)));
+        }
+        self.programmes = state;
+    }
+
     /// Moves the selected channel up or down in the channel list and remembers the order.
     fn move_channel(&mut self, delta: i64) -> Action {
-        if self.focus != Focus::Channels {
+        if !self.grid && self.focus != Focus::Channels {
             return Action::Status("Switch to the channels pane (Tab) to move channels.".to_string());
         }
         if !self.filter.is_empty() {
@@ -474,6 +608,7 @@ impl GuideTab {
         };
         if new_day != self.day {
             self.day = new_day;
+            self.grid_top = 0;
             self.select_programme();
         }
     }
@@ -533,11 +668,32 @@ impl GuideTab {
                 lines.push(Line::raw(""));
             }
             lines.push(Line::raw(format!("Looked for: {}", self.path.display())));
-            lines.push(Line::raw("Press 3, then s, to download the guide. Press r to look again."));
+            lines.push(Line::raw("Press 4, then s, to download the guide. Press r to look again."));
             f.render_widget(
                 Paragraph::new(lines).wrap(Wrap { trim: false }).block(Block::bordered().title(" Guide ")),
                 area,
             );
+            return;
+        }
+
+        if self.grid {
+            let [head, grid, details] =
+                Layout::vertical([Constraint::Length(3), Constraint::Percentage(62), Constraint::Min(6)]).areas(area);
+            self.draw_header(f, head);
+            self.draw_grid(f, grid, favs, ui);
+            self.draw_details(f, details);
+
+            if let (Mode::Filter(input), true) = (&self.mode, grid.height >= 3) {
+                let popup = centered(grid, grid.width.min(50), 3);
+                f.render_widget(Clear, popup);
+                let block = Block::bordered().title(" Filter channels ").border_style(Style::new().fg(Color::Yellow));
+                let inner = block.inner(popup);
+                f.render_widget(block, popup);
+                f.render_widget(Paragraph::new(Line::from(input.spans(inner.width as usize))), inner);
+            }
+            if let (Mode::Search(search), Some(g)) = (&mut self.mode, &self.guide) {
+                draw_search(f, area, search, g);
+            }
             return;
         }
 
@@ -694,6 +850,141 @@ impl GuideTab {
 
         let widget = List::new(items).block(block).highlight_style(selected_style()).highlight_symbol("");
         f.render_stateful_widget(widget, area, &mut self.programmes);
+    }
+
+    /// The newspaper layout: one column per channel, the day's programmes listed down each column.
+    fn draw_grid(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, ui: &UiOptions) {
+        let total = self.visible.len();
+        if total == 0 {
+            f.render_widget(Paragraph::new("No channel matches the filter.").block(Block::bordered()), area);
+            return;
+        }
+        let Some(day) = self.day else {
+            f.render_widget(Paragraph::new("The guide has no programmes.").block(Block::bordered()), area);
+            return;
+        };
+
+        // how many columns fit, and which ones are shown
+        let columns = ((area.width / GRID_MIN_COLUMN) as usize).clamp(1, total);
+        let selected_column = self.channels.selected().unwrap_or(0).min(total - 1);
+        if selected_column < self.grid_first {
+            self.grid_first = selected_column;
+        } else if selected_column >= self.grid_first + columns {
+            self.grid_first = selected_column + 1 - columns;
+        }
+        self.grid_first = self.grid_first.min(total - columns);
+
+        let rects = Layout::horizontal(vec![Constraint::Ratio(1, columns as u32); columns]).split(area);
+        let text_width = (rects[0].width.saturating_sub(2) as usize).saturating_sub(GRID_PREFIX).max(6);
+        let inner_height = area.height.saturating_sub(2) as usize;
+
+        // scroll so that the selected programme is on screen, and the columns stay in step with it
+        let selected_position = {
+            let list = self.day_list();
+            self.programmes.selected().and_then(|i| list.get(i).copied())
+        };
+        if let (Some(g), Some(position), Some(ci)) = (&self.guide, selected_position, self.selected_channel_index()) {
+            let channel = &g.channels[ci];
+            let mut top = self.grid_top;
+            if channel.end(position).is_some_and(|end| end.timestamp() <= top) {
+                top = channel.programmes[position].start.timestamp(); // above the top: bring it to the top
+            }
+            for _ in 0..500 {
+                let entries = column_entries(channel, day, top, text_width, ui);
+                let mut used = 0usize;
+                let mut visible = true;
+                for entry in &entries {
+                    used += entry.lines.len();
+                    if entry.position == position {
+                        visible = used <= inner_height || used == entry.lines.len();
+                        break;
+                    }
+                }
+                if visible {
+                    break;
+                }
+                // below the bottom: scroll past the first entry
+                match entries.first() {
+                    Some(first) => {
+                        let next = channel.end(first.position).map_or(top + 1, |end| end.timestamp());
+                        top = next.max(top + 1);
+                    }
+                    None => break,
+                }
+            }
+            self.grid_top = top;
+        }
+
+        let Some(g) = &self.guide else { return };
+        let now = Utc::now().timestamp();
+        for (slot, rect) in rects.iter().enumerate() {
+            let Some(&ci) = self.visible.get(self.grid_first + slot) else { continue };
+            let channel = &g.channels[ci];
+            let is_selected = self.grid_first + slot == selected_column;
+
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            for entry in column_entries(channel, day, self.grid_top, text_width, ui) {
+                if lines.len() >= inner_height {
+                    break;
+                }
+                let p = &channel.programmes[entry.position];
+                let end = channel.end(entry.position).map(|e| e.timestamp());
+                let is_now = p.start.timestamp() <= now && end.is_some_and(|e| now < e);
+                let is_past = end.is_some_and(|e| e <= now);
+                let mut style = if is_now {
+                    Style::new().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if is_past {
+                    Style::new().fg(Color::DarkGray)
+                } else {
+                    Style::new()
+                };
+                if is_selected && Some(entry.position) == selected_position {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+
+                for (n, text) in entry.lines.iter().enumerate() {
+                    if lines.len() >= inner_height {
+                        break;
+                    }
+                    if n == 0 {
+                        let favorite = if favs.contains(&p.title) {
+                            Span::styled("●", style.fg(parse_color(&ui.favorite_color)))
+                        } else {
+                            Span::styled(" ", style)
+                        };
+                        let genre = match ui.genre_color(&p.genres) {
+                            Some(color) => Span::styled("●", style.fg(parse_color(color))),
+                            None => Span::styled(" ", style),
+                        };
+                        lines.push(Line::from(vec![
+                            favorite,
+                            Span::styled(p.start.format("%H:%M").to_string(), style),
+                            Span::styled(" ", style),
+                            genre,
+                            Span::styled(format!(" {text}"), style),
+                        ]));
+                    } else {
+                        lines.push(Line::styled(format!("{}{text}", " ".repeat(GRID_PREFIX)), style));
+                    }
+                }
+            }
+
+            let title = if channel.country.is_empty() {
+                format!(" {} ", channel.name)
+            } else {
+                format!(" {} {} ", channel.country, channel.name)
+            };
+            let border = if is_selected && self.focus != Focus::Details { Color::Cyan } else { Color::DarkGray };
+            f.render_widget(
+                Paragraph::new(lines).block(
+                    Block::bordered()
+                        .title(title)
+                        .title_alignment(Alignment::Center)
+                        .border_style(Style::new().fg(border)),
+                ),
+                *rect,
+            );
+        }
     }
 
     fn draw_details(&mut self, f: &mut Frame, area: Rect) {
@@ -861,6 +1152,35 @@ mod tests {
         let saved = vec!["c".to_string(), "gone".to_string(), "a".to_string(), "c".to_string()];
         assert_eq!(build_order(&g, &saved), vec![2, 0, 1]);
         assert_eq!(build_order(&g, &[]), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn titles_wrap_to_the_column() {
+        assert_eq!(wrap_text("Zákon a pořádek: Zločinné úmysly III", 16), vec!["Zákon a pořádek:", "Zločinné úmysly", "III"]);
+        assert_eq!(wrap_text("short", 16), vec!["short"]);
+        assert_eq!(wrap_text("Dvacetičtyřhodinovka", 8), vec!["Dvacetič", "tyřhodin", "ovka"]);
+        assert_eq!(wrap_text("", 8), vec![""]);
+    }
+
+    #[test]
+    fn grid_columns_start_at_the_scroll_time() {
+        let xml = r#"<tv>
+            <channel id="cz-a-1"><display-name>A</display-name></channel>
+            <programme start="20261029060000 +0100" stop="20261029070000 +0100" channel="cz-a-1"><title>Ranní</title></programme>
+            <programme start="20261029070000 +0100" stop="20261029080000 +0100" channel="cz-a-1"><title>Zprávy v osm</title></programme>
+            <programme start="20261029080000 +0100" stop="20261029090000 +0100" channel="cz-a-1"><title>Film</title></programme>
+        </tv>"#;
+        let g = guide::parse(xml).unwrap();
+        let ui = UiOptions::default();
+        let day = g.dates[0];
+
+        let all = column_entries(&g.channels[0], day, 0, 20, &ui);
+        assert_eq!(all.iter().map(|e| e.position).collect::<Vec<_>>(), vec![0, 1, 2]);
+
+        // scrolled to 07:30: the 06:00 programme is gone, the one running at 07:30 is the first
+        let top = g.channels[0].programmes[1].start.timestamp() + 30 * 60;
+        let later = column_entries(&g.channels[0], day, top, 20, &ui);
+        assert_eq!(later.iter().map(|e| e.position).collect::<Vec<_>>(), vec![1, 2]);
     }
 
     #[test]

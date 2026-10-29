@@ -58,6 +58,8 @@ pub struct UiOptions {
     pub show_new: bool,
     pub show_rerun: bool,
     pub favorite_color: String,
+    /// Show the guide as columns, one per channel, instead of a channel list and one programme list.
+    pub grid_layout: bool,
     /// The first rule that matches wins.
     pub genre_colors: Vec<GenreColor>,
 }
@@ -70,6 +72,7 @@ impl Default for UiOptions {
             show_new: true,
             show_rerun: true,
             favorite_color: "orange".to_string(),
+            grid_layout: false,
             genre_colors: vec![
                 rule("serial", "blue"),
                 rule("series", "blue"),
@@ -181,6 +184,13 @@ pub fn parse(text: &str) -> Result<Options, String> {
                 }
                 o.ui.favorite_color = value.to_string();
             }
+            "guide_layout" => {
+                o.ui.grid_layout = match value.to_ascii_lowercase().as_str() {
+                    "grid" => true,
+                    "list" => false,
+                    _ => return Err(at(number, "guide_layout must be list or grid.".to_string())),
+                };
+            }
             "genre_colors" => {
                 // "none" means no rules at all
                 o.ui.genre_colors.clear();
@@ -263,6 +273,7 @@ pub fn to_text(o: &Options) -> String {
     let _ = writeln!(s, "show_new = {}", o.ui.show_new);
     let _ = writeln!(s, "show_rerun = {}", o.ui.show_rerun);
     let _ = writeln!(s, "favorite_color = {}", o.ui.favorite_color);
+    let _ = writeln!(s, "guide_layout = {}", if o.ui.grid_layout { "grid" } else { "list" });
     if o.ui.genre_colors.is_empty() {
         let _ = writeln!(s, "genre_colors = none");
     }
@@ -549,6 +560,15 @@ mod tests {
         assert_eq!(back.upload.protocol, Protocol::Sftp);
         assert_eq!(back.upload.port, Some(2222));
         assert_eq!(back.upload.key_file, o.upload.key_file);
+    }
+
+    #[test]
+    fn the_guide_layout_is_saved() {
+        let mut o = Options::default();
+        assert!(!parse(&to_text(&o)).unwrap().ui.grid_layout);
+        o.ui.grid_layout = true;
+        assert!(parse(&to_text(&o)).unwrap().ui.grid_layout);
+        assert!(parse("guide_layout = tiles").is_err());
     }
 
     #[test]

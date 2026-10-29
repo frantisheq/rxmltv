@@ -63,6 +63,8 @@ pub enum Action {
     StartUpload,
     /// Delete every cached file (the Settings tab asks for confirmation first).
     PurgeCache,
+    /// Switch the Guide between the list and the grid layout.
+    ToggleLayout,
     ReloadGuide,
     /// Add the show to the favorites, or remove it when it is one already.
     ToggleFavorite(String),
@@ -216,7 +218,8 @@ impl App {
             Some(path) => PathBuf::from(path),
             None => config::default_path(),
         };
-        let guide = GuideTab::new(PathBuf::from(&opts.output), config_path.with_extension("order"));
+        let mut guide = GuideTab::new(PathBuf::from(&opts.output), config_path.with_extension("order"));
+        guide.set_grid(opts.ui.grid_layout);
         let favorites = Favorites::load(config_path.with_extension("favorites"));
         App {
             opts,
@@ -368,6 +371,13 @@ impl App {
                 self.goto(Tab::Upload);
                 self.upload.start(&self.opts, &self.handle);
             }
+            Action::ToggleLayout => {
+                self.opts.ui.grid_layout = !self.opts.ui.grid_layout;
+                self.guide.set_grid(self.opts.ui.grid_layout);
+                self.settings.mark_dirty();
+                let name = if self.opts.ui.grid_layout { "grid" } else { "list" };
+                self.set_status(format!("Guide layout: {name} (s on the Settings tab saves it)."));
+            }
             Action::PurgeCache => {
                 let text = if self.update.is_running() {
                     "An update is running: cancel it (Update tab, x) before purging the cache.".to_string()
@@ -417,6 +427,7 @@ impl App {
 
     fn goto(&mut self, tab: Tab) {
         if tab == Tab::Guide {
+            self.guide.set_grid(self.opts.ui.grid_layout); // it may have been changed on the Settings tab
             // The output file may have been changed on the Settings tab.
             let path = PathBuf::from(&self.opts.output);
             if self.guide.path() != path.as_path() {
@@ -525,6 +536,8 @@ fn draw_help(f: &mut Frame, area: Rect) {
         key("Up Down j k", "move; PgUp PgDn Home End jump"),
         key("Left Right h l", "previous / next day"),
         key("n", "jump to what is on now"),
+        key("v", "switch between the list and the grid layout"),
+        key("[ ]", "previous / next day (in the grid, ← → pick the channel)"),
         key("/", "search programme titles in all channels"),
         key("f", "filter the channel list by name"),
         key("r", "reload the guide file"),
