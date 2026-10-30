@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
@@ -23,8 +23,6 @@ struct Group {
     name: String,
     /// Lower-case, diacritics removed, for matching what the user saved.
     norm_name: String,
-    /// Position of its first channel in the catalog (channels of a group are next to each other).
-    start: usize,
     count: usize,
 }
 
@@ -151,7 +149,7 @@ impl Picker {
 
         self.groups.clear();
         self.group_of.clear();
-        for (i, entry) in self.catalog.iter().enumerate() {
+        for entry in &self.catalog {
             let same = self.groups.last().is_some_and(|g| g.code == entry.code);
             if same {
                 if let Some(g) = self.groups.last_mut() {
@@ -162,7 +160,6 @@ impl Picker {
                     code: entry.code.clone(),
                     name: if entry.group.trim().is_empty() { "(no group)".to_string() } else { entry.group.clone() },
                     norm_name: normalize(&entry.group),
-                    start: i,
                     count: 1,
                 });
             }

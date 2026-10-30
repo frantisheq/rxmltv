@@ -57,7 +57,6 @@ impl Tab {
 pub enum Action {
     None,
     Status(String),
-    Goto(Tab),
     SaveConfig,
     StartUpdate,
     StartUpload,
@@ -361,7 +360,6 @@ impl App {
         match action {
             Action::None => {}
             Action::Status(text) => self.set_status(text),
-            Action::Goto(tab) => self.goto(tab),
             Action::SaveConfig => self.save_config(),
             Action::StartUpdate => {
                 self.goto(Tab::Update);

@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;

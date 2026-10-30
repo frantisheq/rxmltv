@@ -396,6 +396,7 @@ pub fn group_matches(selected: &str, code: &str, name: &str) -> bool {
     n == code || n == normalize(name)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn group_selected(o: &Options, code: &str, name: &str) -> bool {
     o.groups.as_ref().is_some_and(|g| g.iter().any(|x| group_matches(x, code, name)))
 }

@@ -34,7 +34,9 @@ jobs:
           - { os: ubuntu-24.04,  rid: linux-armv7,   target: armv7-unknown-linux-musleabihf, binary: rxmltv,   zig: true,  test: false }
           # mipsel has no prebuilt Rust standard library (a "tier 3" target), so it is built with nightly Rust and
           # -Zbuild-std. The result is a static soft-float binary, which also runs on MIPS CPUs with an FPU.
-          - { os: ubuntu-24.04,  rid: linux-mipsel,  target: mipsel-unknown-linux-musl,     binary: rxmltv,     zig: true,  test: false, nightly: true, experimental: true }
+          # Newer zig releases ship a C library written in zig that fails to link for mipsel
+          # ("undefined symbol: mem.eqlBytes ... heap.SmpAllocator"), so this job pins an older zig.
+          - { os: ubuntu-24.04,  rid: linux-mipsel,  target: mipsel-unknown-linux-musl,     binary: rxmltv,     zig: true,  test: false, nightly: true, experimental: true, zig_version: "==0.14.1" }
           - { os: windows-latest, rid: win-x64,       target: x86_64-pc-windows-msvc,        binary: rxmltv.exe, zig: false, test: true }
           - { os: windows-latest, rid: win-arm64,     target: aarch64-pc-windows-msvc,       binary: rxmltv.exe, zig: false, test: false }
           # macos-latest is an Apple Silicon runner; the x86-64 build is cross-compiled on it.
@@ -65,7 +67,7 @@ jobs:
       # zig comes from PyPI: cargo-zigbuild finds it as "python3 -m ziglang".
       - name: Install zig
         if: matrix.zig
-        run: python3 -m pip install --break-system-packages ziglang
+        run: python3 -m pip install --break-system-packages "ziglang${{ matrix.zig_version }}"
 
       - uses: Swatinem/rust-cache@v2
         with:
