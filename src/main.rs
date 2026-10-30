@@ -641,7 +641,7 @@ async fn build_programme(fetcher: &Fetcher, ch: &Channel, entry: &DayEntry, tz: 
 
     let started = Instant::now();
     let info = enrichment::extract(title, entry.clean_title.as_deref(), detail.as_ref(), entry.short.as_deref());
-    stats::add_since(&stats::EXTRACT_NANOS, started);
+    stats::add_since(&stats::EXTRACT_MILLIS, started);
 
     if stop_fmt.as_deref() == Some(start_fmt.as_str()) {
         stop_fmt = None; // a few zero-length entries exist
@@ -957,7 +957,7 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
                     output::write_programme(&mut buffer, p, &channel.xml_id, &opts);
                     writer.write_all(buffer.as_bytes())?;
                 }
-                stats::add_since(&stats::WRITE_NANOS, started);
+                stats::add_since(&stats::WRITE_MILLIS, started);
 
                 programme_count += list.len();
             }
@@ -973,7 +973,7 @@ async fn run(opts: Options) -> Result<u8, BoxError> {
 
     let started = Instant::now();
     output::assemble_output(&full, &output_tmp, &written, &programmes_tmp)?;
-    stats::add_since(&stats::WRITE_NANOS, started);
+    stats::add_since(&stats::WRITE_MILLIS, started);
 
     progress::info(format!(
         "Wrote {} programmes on {} channels to {} in {}.",

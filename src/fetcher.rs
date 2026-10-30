@@ -63,7 +63,7 @@ impl Fetcher {
     {
         let started = Instant::now();
         let result = self.get_core(relative_uri, cache_file, refresh, &parse).await;
-        stats::add_since(&stats::READ_NANOS, started);
+        stats::add_since(&stats::READ_MILLIS, started);
         result
     }
 

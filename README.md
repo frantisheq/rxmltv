@@ -14,7 +14,9 @@ Download the archive for your system from the [Releases](../../releases) page an
 |---------|-----|------|
 | Linux (static, any distribution) | x86-64 | `rxmltv-<version>-linux-x64.tar.gz` |
 | | ARM64 | `rxmltv-<version>-linux-arm64.tar.gz` |
+| | ARMv7 (32-bit, hard-float) | `rxmltv-<version>-linux-armv7.tar.gz` |
 | | RISC-V 64 | `rxmltv-<version>-linux-riscv64.tar.gz` |
+| | MIPS little-endian (mipsel, 32-bit) | `rxmltv-<version>-linux-mipsel.tar.gz` |
 | FreeBSD (built on 14, runs on 14.x and newer) | x86-64 | `rxmltv-<version>-freebsd-x64.tar.gz` |
 | | ARM64 | `rxmltv-<version>-freebsd-arm64.tar.gz` |
 | Windows | x86-64 | `rxmltv-<version>-win-x64.zip` |
@@ -23,7 +25,7 @@ Download the archive for your system from the [Releases](../../releases) page an
 | | Intel | `rxmltv-<version>-macos-x64.tar.gz` |
 
 **Debian, Ubuntu and relatives** (`.deb`) and **Fedora, RHEL, openSUSE and relatives** (`.rpm`) packages are
-published for x86-64, ARM64 and RISC-V 64 as well:
+published for x86-64, ARM64, ARMv7 (Debian `armhf`, RPM `armv7hl`), RISC-V 64 and mipsel as well:
 
 ```sh
 sudo dpkg -i rxmltv_<version>_amd64.deb          # or: sudo apt install ./rxmltv_<version>_amd64.deb
@@ -33,6 +35,11 @@ sudo rpm -i rxmltv-<version>-1.x86_64.rpm        # or: sudo dnf install ./rxmltv
 They install `rxmltv` into `/usr/bin` and the README into `/usr/share/doc/rxmltv`. The binary is the same static
 build as the tar.gz, so the packages have no dependencies; `curl` is only recommended (it is used for uploads).
 Settings and the cache stay per user, in `~/.rxmltv`.
+
+The mipsel build is experimental: Rust has no prebuilt standard library for it, so it is built with nightly Rust and
+`-Zbuild-std`. If that build breaks, a release simply comes without the mipsel files. It is a static soft-float
+binary, which runs on every little-endian MIPS32r2 Linux system, with or without an FPU (including most OpenWrt
+routers). On 32-bit systems the counters in the end-of-run summary are 32-bit; nothing else differs.
 
 There is no RISC-V build for Windows, macOS or FreeBSD: Windows and macOS don't exist for RISC-V, and FreeBSD's
 RISC-V Rust target has no CI route yet.
