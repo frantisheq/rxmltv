@@ -146,7 +146,8 @@ jobs:
           done
 
       # .deb and .rpm from the static Linux binaries. nfpm needs no Rust, only the binary and
-      # packaging/nfpm.yaml; ARCH, VERSION and BINARY fill in the variables in that file.
+      # packaging/nfpm.yaml; ARCH and VERSION fill in the variables in that file, and the executable
+      # for each architecture is copied to build/rxmltv, the path the file lists.
       - name: Install nfpm
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 
@@ -159,8 +160,9 @@ jobs:
           for pair in linux-x64:amd64 linux-arm64:arm64 linux-riscv64:riscv64; do
             rid="${pair%%:*}"
             export ARCH="${pair##*:}"
-            export BINARY="artifacts/rxmltv-$rid/rxmltv"
-            chmod +x "$BINARY"
+            mkdir -p build
+            cp "artifacts/rxmltv-$rid/rxmltv" build/rxmltv
+            chmod +x build/rxmltv
             for format in deb rpm; do
               nfpm package --config packaging/nfpm.yaml --packager "$format" --target dist/
             done

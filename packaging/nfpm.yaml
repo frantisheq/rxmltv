@@ -1,5 +1,6 @@
 # Builds the .deb and .rpm packages (see the "release" job in .github/workflows/build.yml).
-# The variables come from the environment: ARCH (amd64, arm64, riscv64), VERSION and BINARY (the built executable).
+# ARCH (amd64, arm64, riscv64) and VERSION come from the environment. nfpm does not expand variables in
+# "src" paths, so the workflow copies the right executable to build/rxmltv before packaging.
 name: rxmltv
 arch: ${ARCH}
 platform: linux
@@ -14,7 +15,7 @@ description: |
 license: Unspecified
 
 contents:
-  - src: ${BINARY}
+  - src: build/rxmltv
     dst: /usr/bin/rxmltv
     file_info:
       mode: 0755

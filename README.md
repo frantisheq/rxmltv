@@ -138,11 +138,14 @@ The generated guide (`--output`, default `xmltv.xml`) is written where you say. 
 folder by an earlier version is still used when `~/.rxmltv/rxmltv.conf` does not exist. The old default cache
 `data/cache/` is no longer used; delete it if it is still there.
 
-![The Guide tab: channels, one day of programmes, and details](docs/tui-guide.jpg)
-
-(The screenshots show an earlier version: the programme list now also has the favorite and genre dot columns and the channel list a country code column.)
-
-![The Settings tab: the updater's options as a menu](docs/tui-settings.jpg)
+| | |
+|---|---|
+| **Guide**, list layout | **Guide**, grid layout |
+| ![The Guide tab in list layout: channels, one day of programmes, and details](docs/tui-guide.png) | ![The Guide tab in grid layout: one column per channel, details below](docs/tui-grid.png) |
+| **Favorites** | **Settings** |
+| ![The Favorites tab: favorite shows and their next airings](docs/tui-favorites.png) | ![The Settings tab: the updater's options as a menu](docs/tui-settings.png) |
+| **Update** | **Upload** |
+| ![The Update tab: progress bar, file counters and log](docs/tui-update.png) | ![The Upload tab: target, progress bar and log](docs/tui-upload.png) |
 
 Five tabs (`1`-`5` or F1-F5; `?` shows all keys; `q` quits):
 
