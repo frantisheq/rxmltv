@@ -58,6 +58,8 @@ pub struct UiOptions {
     pub show_new: bool,
     pub show_rerun: bool,
     pub favorite_color: String,
+    /// Show the country code before channel names.
+    pub show_country: bool,
     /// Show the guide as columns, one per channel, instead of a channel list and one programme list.
     pub grid_layout: bool,
     /// The first rule that matches wins.
@@ -72,6 +74,7 @@ impl Default for UiOptions {
             show_new: true,
             show_rerun: true,
             favorite_color: "orange".to_string(),
+            show_country: true,
             grid_layout: false,
             genre_colors: vec![
                 rule("serial", "blue"),
@@ -96,6 +99,19 @@ impl Default for UiOptions {
 }
 
 impl UiOptions {
+    /// The dot colours for a programme whose categories, normalized and joined, are `genres`: one for each rule
+    /// that matches, in the order of the rules (the same colour is not repeated).
+    pub fn genre_colors_for(&self, genres: &str) -> Vec<&str> {
+        let mut colors: Vec<&str> = Vec::new();
+        for rule in &self.genre_colors {
+            let keyword = normalize(&rule.keyword);
+            if !keyword.is_empty() && genres.contains(&keyword) && !colors.contains(&rule.color.as_str()) {
+                colors.push(rule.color.as_str());
+            }
+        }
+        colors
+    }
+
     /// The dot colour for a programme whose categories, normalized and joined, are `genres`.
     pub fn genre_color(&self, genres: &str) -> Option<&str> {
         self.genre_colors
@@ -177,6 +193,8 @@ pub fn parse(text: &str) -> Result<Options, String> {
             "compress_cache" => o.compress_cache = flag("compress_cache")?,
             "show_quality" => o.ui.show_quality = flag("show_quality")?,
             "show_new" => o.ui.show_new = flag("show_new")?,
+            "show_country" => o.ui.show_country = flag("show_country")?,
+            "english_genres" => o.english_genres = flag("english_genres")?,
             "show_rerun" => o.ui.show_rerun = flag("show_rerun")?,
             "favorite_color" => {
                 if !valid_color(value) {
@@ -267,10 +285,12 @@ pub fn to_text(o: &Options) -> String {
     let _ = writeln!(s, "retry_missing = {}", o.retry_missing);
     let _ = writeln!(s, "refresh_channels = {}", o.refresh_channels);
     let _ = writeln!(s, "compress_cache = {}", o.compress_cache);
+    let _ = writeln!(s, "english_genres = {}", o.english_genres);
 
     let _ = writeln!(s, "\n# Terminal UI");
     let _ = writeln!(s, "show_quality = {}", o.ui.show_quality);
     let _ = writeln!(s, "show_new = {}", o.ui.show_new);
+    let _ = writeln!(s, "show_country = {}", o.ui.show_country);
     let _ = writeln!(s, "show_rerun = {}", o.ui.show_rerun);
     let _ = writeln!(s, "favorite_color = {}", o.ui.favorite_color);
     let _ = writeln!(s, "guide_layout = {}", if o.ui.grid_layout { "grid" } else { "list" });
@@ -353,6 +373,9 @@ pub fn command_line(o: &Options) -> String {
             })
             .collect();
         parts.push(format!("--channels {}", quote(&list.join(","))));
+    }
+    if !o.english_genres {
+        parts.push("--no-english-genres".to_string());
     }
     if o.upload.enabled {
         parts.push("--upload".to_string());
@@ -596,6 +619,25 @@ mod tests {
         assert!(valid_color("#00FFaa"));
         assert!(!valid_color("#00ffa"));
         assert!(!valid_color("reddish"));
+    }
+
+    #[test]
+    fn several_rules_can_match_one_programme() {
+        let ui = UiOptions::default();
+        // series (blue) + sports (green); "serial" and "series" are both blue, which counts once
+        assert_eq!(ui.genre_colors_for("series serial sportovni sport"), vec!["blue", "green"]);
+        assert!(ui.genre_colors_for("nothing").is_empty());
+    }
+
+    #[test]
+    fn new_options_are_saved() {
+        let mut o = Options::default();
+        assert!(o.english_genres && o.ui.show_country);
+        o.english_genres = false;
+        o.ui.show_country = false;
+        let back = parse(&to_text(&o)).unwrap();
+        assert!(!back.english_genres && !back.ui.show_country);
+        assert!(command_line(&o).contains("--no-english-genres"));
     }
 
     #[test]

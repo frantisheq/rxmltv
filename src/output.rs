@@ -165,8 +165,8 @@ pub fn write_programme(out: &mut String, p: &Programme, channel_id: &str, opts: 
         leaf(out, 2, "date", &[], &year.to_string());
     }
 
-    for c in &i.categories {
-        leaf(out, 2, "category", &[("lang", c.lang)], &c.text);
+    for (lang, text) in crate::genres::category_elements(&i.categories, opts.english_genres) {
+        leaf(out, 2, "category", &[("lang", lang)], &text);
     }
 
     if let Some(minutes) = i.length_minutes {

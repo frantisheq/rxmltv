@@ -33,7 +33,9 @@ enum Item {
     NoImages,
     RetryMissing,
     RefreshChannels,
+    EnglishGenres,
     GuideLayout,
+    ShowCountry,
     ShowQuality,
     ShowNew,
     ShowRerun,
@@ -57,7 +59,7 @@ enum Item {
     PurgeCache,
 }
 
-const ITEMS: [Item; 36] = [
+const ITEMS: [Item; 38] = [
     Item::Days,
     Item::Output,
     Item::CacheDir,
@@ -72,7 +74,9 @@ const ITEMS: [Item; 36] = [
     Item::NoImages,
     Item::RetryMissing,
     Item::RefreshChannels,
+    Item::EnglishGenres,
     Item::GuideLayout,
+    Item::ShowCountry,
     Item::ShowQuality,
     Item::ShowNew,
     Item::ShowRerun,
@@ -113,7 +117,9 @@ impl Item {
             Item::NoImages => "No programme posters",
             Item::RetryMissing => "Retry missing items",
             Item::RefreshChannels => "Refresh channel list",
+            Item::EnglishGenres => "English genre names",
             Item::GuideLayout => "Guide layout",
+            Item::ShowCountry => "Show country codes",
             Item::ShowQuality => "Show quality tag (HDTV)",
             Item::ShowNew => "Show NEW tag",
             Item::ShowRerun => "Show RERUN tag",
@@ -154,6 +160,8 @@ impl Item {
             Item::NoImages => "Do not write poster <icon> elements.",
             Item::RetryMissing => "Ask the server again for items it had no data for (normally skipped for 12 hours).",
             Item::RefreshChannels => "Download the channel list again instead of using the cached channels.xml (it is otherwise never refreshed).",
+            Item::EnglishGenres => "Write an English name (<category lang=\"en\">) after each Czech genre that has a known translation, in the XMLTV file. First letters are always capitalised.",
+            Item::ShowCountry => "Show the country code (CZ, SK ...) before channel names in the Guide and Favorites tabs.",
             Item::GuideLayout => "list: channel list and one programme list. grid: one column per channel, like a newspaper listing, with the details below. Enter or Left/Right switch; v switches in the Guide.",
             Item::ShowQuality => "Show the quality tag (HDTV) after the show name in the Guide's programme list.",
             Item::ShowNew => "Show the NEW tag after the show name in the Guide's programme list.",
@@ -194,6 +202,8 @@ impl Item {
                 | Item::NoImages
                 | Item::RetryMissing
                 | Item::RefreshChannels
+                | Item::EnglishGenres
+                | Item::ShowCountry
                 | Item::ShowQuality
                 | Item::ShowNew
                 | Item::ShowRerun
@@ -238,6 +248,8 @@ fn flag_ref(item: Item, o: &mut Options) -> Option<&mut bool> {
         Item::NoImages => Some(&mut o.no_images),
         Item::RetryMissing => Some(&mut o.retry_missing),
         Item::RefreshChannels => Some(&mut o.refresh_channels),
+        Item::EnglishGenres => Some(&mut o.english_genres),
+        Item::ShowCountry => Some(&mut o.ui.show_country),
         Item::ShowQuality => Some(&mut o.ui.show_quality),
         Item::ShowNew => Some(&mut o.ui.show_new),
         Item::ShowRerun => Some(&mut o.ui.show_rerun),
@@ -257,6 +269,8 @@ fn flag_get(item: Item, o: &Options) -> bool {
         Item::NoImages => o.no_images,
         Item::RetryMissing => o.retry_missing,
         Item::RefreshChannels => o.refresh_channels,
+        Item::EnglishGenres => o.english_genres,
+        Item::ShowCountry => o.ui.show_country,
         Item::ShowQuality => o.ui.show_quality,
         Item::ShowNew => o.ui.show_new,
         Item::ShowRerun => o.ui.show_rerun,
@@ -334,6 +348,8 @@ fn value_text(item: Item, o: &Options) -> String {
         | Item::NoImages
         | Item::RetryMissing
         | Item::RefreshChannels
+        | Item::EnglishGenres
+        | Item::ShowCountry
         | Item::ShowQuality
         | Item::ShowNew
         | Item::ShowRerun

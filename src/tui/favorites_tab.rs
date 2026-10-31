@@ -135,12 +135,12 @@ impl FavoritesTab {
                 for &&(c, p) in upcoming.iter().take(30) {
                     let channel = &g.channels[c];
                     let programme = &channel.programmes[p];
-                    lines.push(Line::raw(format!(
-                        "{}  {} {}",
-                        programme.start.format("%a %d.%m. %H:%M"),
-                        channel.country,
-                        channel.name
-                    )));
+                    let channel_name = if ui.show_country && !channel.country.is_empty() {
+                        format!("{} {}", channel.country, channel.name)
+                    } else {
+                        channel.name.clone()
+                    };
+                    lines.push(Line::raw(format!("{}  {channel_name}", programme.start.format("%a %d.%m. %H:%M"))));
                 }
             }
         } else if guide.is_none() && len > 0 {

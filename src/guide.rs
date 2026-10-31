@@ -256,11 +256,12 @@ fn programme_from(node: Node, start: DateTime<FixedOffset>) -> GuideProgramme {
         genres: String::new(),
     };
 
+    let mut all_categories: Vec<(String, String)> = Vec::new();
     for c in node.children().filter(|c| c.is_element()) {
         match c.tag_name().name() {
             "category" => {
                 if let Some(category) = non_blank(value(c)) {
-                    p.categories.push(category);
+                    all_categories.push((c.attribute("lang").unwrap_or("").to_string(), category));
                 }
             }
             "credits" => {
@@ -286,7 +287,13 @@ fn programme_from(node: Node, start: DateTime<FixedOffset>) -> GuideProgramme {
         }
     }
 
-    p.genres = normalize(&p.categories.join(" "));
+    // The file may carry English translations of the genres. They are not shown (the originals are), but the
+    // genre colours match on them too, so a keyword works in either language.
+    p.genres = normalize(&all_categories.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(" "));
+    p.categories = crate::genres::without_translations(&all_categories)
+        .iter()
+        .map(|c| crate::genres::capitalize_first(c))
+        .collect();
     p
 }
 
@@ -383,6 +390,22 @@ mod tests {
         let g = parse(SAMPLE).unwrap();
         assert_eq!(g.channels[0].programmes[1].genres, "zabava");
         assert_eq!(g.top_categories, vec![("Zábava".to_string(), 1)]);
+    }
+
+    #[test]
+    fn translated_genres_are_matched_but_not_shown() {
+        let xml = r#"<tv>
+            <channel id="a"><display-name>A</display-name></channel>
+            <programme start="20261029060000 +0100" channel="a"><title>X</title>
+              <category lang="en">Movie</category>
+              <category lang="cs">Akční</category><category lang="en">Action</category>
+              <category lang="cs">drama</category><category lang="en">Drama</category>
+            </programme>
+        </tv>"#;
+        let g = parse(xml).unwrap();
+        let p = &g.channels[0].programmes[0];
+        assert_eq!(p.categories, vec!["Movie", "Akční", "Drama"]);
+        assert!(p.genres.contains("action") && p.genres.contains("akcni"));
     }
 
     #[test]

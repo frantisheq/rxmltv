@@ -93,8 +93,8 @@ fn selection(len: usize) -> ListState {
 
 /// The narrowest a grid column gets (borders included).
 const GRID_MIN_COLUMN: u16 = 28;
-/// Characters before the title in a grid entry: favorite dot, time, space, genre dot.
-const GRID_PREFIX: usize = 9;
+/// Characters before the title in a grid entry: favorite dot, time, space.
+const GRID_PREFIX: usize = 7;
 
 /// One programme in a grid column: its position in the channel's programmes, and its title wrapped to the column.
 struct GridEntry {
@@ -148,6 +148,11 @@ fn column_entries(channel: &GuideChannel, day: NaiveDate, top: i64, text_width: 
             GridEntry { position: i, lines: wrap_text(&title, text_width) }
         })
         .collect()
+}
+
+/// The colours of the genre dots of a programme (at most six), from the rules in the settings.
+fn genre_dots(ui: &UiOptions, genres: &str) -> Vec<Color> {
+    ui.genre_colors_for(genres).into_iter().take(6).map(parse_color).collect()
 }
 
 /// Channel positions in the saved order; channels that are not in the saved order follow, as in the file.
@@ -703,7 +708,7 @@ impl GuideTab {
         let [head, programmes, details] =
             Layout::vertical([Constraint::Length(3), Constraint::Percentage(50), Constraint::Min(4)]).areas(right);
 
-        self.draw_channels(f, left);
+        self.draw_channels(f, left, ui);
         self.draw_header(f, head);
         self.draw_programmes(f, programmes, favs, ui);
         self.draw_details(f, details);
@@ -713,7 +718,7 @@ impl GuideTab {
         }
     }
 
-    fn draw_channels(&mut self, f: &mut Frame, area: Rect) {
+    fn draw_channels(&mut self, f: &mut Frame, area: Rect, ui: &UiOptions) {
         let (list_area, filter_area) = if matches!(self.mode, Mode::Filter(_)) {
             let [top, bottom] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(area);
             (top, Some(bottom))
@@ -721,17 +726,20 @@ impl GuideTab {
             (area, None)
         };
 
-        let width = list_area.width.saturating_sub(8) as usize;
+        let code_width = if ui.show_country { 3 } else { 0 };
+        let width = list_area.width.saturating_sub(5 + code_width) as usize;
         let (items, total): (Vec<ListItem<'static>>, usize) = match &self.guide {
             Some(g) => (
                 self.visible
                     .iter()
                     .map(|&i| {
                         let channel = &g.channels[i];
-                        ListItem::new(Line::from(vec![
-                            Span::styled(format!("{:<3}", channel.country), Style::new().fg(Color::Cyan)),
-                            Span::raw(fit(&channel.name, width)),
-                        ]))
+                        let mut spans = Vec::new();
+                        if ui.show_country {
+                            spans.push(Span::styled(format!("{:<3}", channel.country), Style::new().fg(Color::Cyan)));
+                        }
+                        spans.push(Span::raw(fit(&channel.name, width)));
+                        ListItem::new(Line::from(spans))
                     })
                     .collect(),
                 g.channels.len(),
@@ -794,6 +802,7 @@ impl GuideTab {
         let focused = self.focus == Focus::Programmes;
         let list = self.day_list();
         let now = Utc::now().timestamp();
+        let inner = area.width.saturating_sub(2) as usize;
 
         let items: Vec<ListItem<'static>> = match self.selected_channel() {
             Some(channel) => list
@@ -817,23 +826,31 @@ impl GuideTab {
                         Style::new()
                     };
 
-                    // columns: on-now marker, favorite dot, time, genre dot, title
+                    // columns: on-now marker, favorite dot, time, title; the genre dots sit at the right border
                     let favorite = if favs.contains(&p.title) {
                         Span::styled("●", Style::new().fg(parse_color(&ui.favorite_color)))
                     } else {
                         Span::raw(" ")
                     };
-                    let genre = match ui.genre_color(&p.genres) {
-                        Some(color) => Span::styled("●", Style::new().fg(parse_color(color))),
-                        None => Span::raw(" "),
-                    };
-                    ListItem::new(Line::from(vec![
+                    let dots = genre_dots(ui, &p.genres);
+                    let dots_width = dots.len() * 2; // a dot and a space after it
+                    let prefix = 9; // marker, favorite dot, " HH:MM "
+                    let room = inner.saturating_sub(prefix + dots_width + usize::from(!dots.is_empty()));
+                    let shown = fit(&title, room);
+                    let pad = inner.saturating_sub(prefix + shown.chars().count() + dots_width);
+
+                    let mut spans = vec![
                         Span::styled(if is_now { ">" } else { " " }, style),
                         favorite,
                         Span::styled(format!(" {} ", p.start.format("%H:%M")), style),
-                        genre,
-                        Span::styled(format!(" {title}"), style),
-                    ]))
+                        Span::styled(shown, style),
+                        Span::raw(" ".repeat(pad)),
+                    ];
+                    for color in dots {
+                        spans.push(Span::styled("●", Style::new().fg(color)));
+                        spans.push(Span::raw(" "));
+                    }
+                    ListItem::new(Line::from(spans))
                 })
                 .collect(),
             None => Vec::new(),
@@ -942,34 +959,44 @@ impl GuideTab {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
 
+                let dots = genre_dots(ui, &p.genres);
+                let inner_width = rect.width.saturating_sub(2) as usize;
                 for (n, text) in entry.lines.iter().enumerate() {
                     if lines.len() >= inner_height {
                         break;
                     }
-                    if n == 0 {
+                    let mut spans: Vec<Span<'static>> = if n == 0 {
                         let favorite = if favs.contains(&p.title) {
                             Span::styled("●", style.fg(parse_color(&ui.favorite_color)))
                         } else {
                             Span::styled(" ", style)
                         };
-                        let genre = match ui.genre_color(&p.genres) {
-                            Some(color) => Span::styled("●", style.fg(parse_color(color))),
-                            None => Span::styled(" ", style),
-                        };
-                        lines.push(Line::from(vec![
+                        vec![
                             favorite,
                             Span::styled(p.start.format("%H:%M").to_string(), style),
-                            Span::styled(" ", style),
-                            genre,
                             Span::styled(format!(" {text}"), style),
-                        ]));
+                        ]
                     } else {
-                        lines.push(Line::styled(format!("{}{text}", " ".repeat(GRID_PREFIX)), style));
+                        vec![Span::styled(format!("{}{text}", " ".repeat(GRID_PREFIX)), style)]
+                    };
+
+                    // the genre dots go at the right end of the last line of the entry, when they fit there
+                    if n + 1 == entry.lines.len() && !dots.is_empty() {
+                        let used = GRID_PREFIX + text.chars().count();
+                        let dots_width = dots.len() * 2;
+                        if used + dots_width <= inner_width {
+                            spans.push(Span::styled(" ".repeat(inner_width - used - dots_width), style));
+                            for color in &dots {
+                                spans.push(Span::styled("●", style.fg(*color)));
+                                spans.push(Span::styled(" ", style));
+                            }
+                        }
                     }
+                    lines.push(Line::from(spans));
                 }
             }
 
-            let title = if channel.country.is_empty() {
+            let title = if channel.country.is_empty() || !ui.show_country {
                 format!(" {} ", channel.name)
             } else {
                 format!(" {} {} ", channel.country, channel.name)

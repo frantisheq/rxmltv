@@ -1,6 +1,7 @@
 mod config;
 mod enrichment;
 mod fetcher;
+mod genres;
 mod groups;
 #[cfg(feature = "tui")]
 mod guide;
@@ -56,6 +57,7 @@ const USAGE: &str = r##"Usage: rxmltv [options]
   --keep-empty-channels  Also write channels that have no programmes
   --no-images         Don't write poster <icon> elements
   --retry-missing     Ask the server again for items it had no data for (otherwise skipped for 12 h)
+  --no-english-genres Do not add English names after the Czech genres (categories) in the XMLTV file
   --compress-cache    Store cache files gzip-compressed (and compress the existing ones) to save disk space
   --purge-cache       Delete every cached file first (including the channel list), then update
   --refresh-channels  Download the channel list again instead of using the cached channels.xml
@@ -87,6 +89,8 @@ pub struct Options {
     pub refresh_channels: bool,
     pub compress_cache: bool,
     pub purge_cache: bool,
+    /// Write an English <category> after each Czech genre that has a known translation.
+    pub english_genres: bool,
     pub strip_hd_tv: bool,
     pub tui: bool,
     #[cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -117,6 +121,7 @@ impl Default for Options {
             refresh_channels: false,
             compress_cache: false,
             purge_cache: false,
+            english_genres: true,
             strip_hd_tv: false,
             tui: false,
             config_path: None,
@@ -337,6 +342,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--retry-missing" => o.retry_missing = true,
             "--refresh-channels" => o.refresh_channels = true,
             "--compress-cache" => o.compress_cache = true,
+            "--no-english-genres" => o.english_genres = false,
             "--purge-cache" => o.purge_cache = true,
             "--upload" => o.upload.enabled = true,
             "--post-command" => o.post_command = take_value(name, inline, args, &mut i)?,

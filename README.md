@@ -60,6 +60,7 @@ rxmltv [options]
 | `--days <n>` | Days to download, starting today (default 7) |
 | `--output <file>` | Output file (default `xmltv.xml`). A name ending in `.gz` is written gzip-compressed |
 | `--cache-dir <dir>` | Cache folder (default `~/.rxmltv/cache`; a leading `~` is the home folder) |
+| `--no-english-genres` | Do not add English names after the Czech genres in the XMLTV file (see below) |
 | `--compress-cache` | Store cache files gzip-compressed, and compress the existing ones, to save disk space |
 | `--purge-cache` | Delete every cached file first (also the channel list), then update |
 | `--clean-cache` | Delete cached files older than today, expired "no data" markers and leftover temp files |
@@ -163,8 +164,10 @@ Five tabs (`1`-`5` or F1-F5; `?` shows all keys; `q` quits):
     the day's programmes (time and title) listed down each column and the details tab below. `←`/`→` pick the
     channel, `↑`/`↓` the programme (the columns scroll together, so the same time stays level across channels),
     `[`/`]` change day. Columns are at least 28 characters wide; as many as fit are shown.
-  - The programme list has columns: `>` for what is on now, a **favorite dot**, the time, a **genre dot**, the title.
-    The `HDTV`, `NEW` and `RERUN` tags after the title can be switched off in Settings.
+  - The programme list has columns: `>` for what is on now, a **favorite dot**, the time, the title. The
+    **genre dots** sit at the right border: one dot for every genre rule (Settings > Genre dot colours) that
+    matches the programme, so a crime series can show several. The `HDTV`, `NEW` and `RERUN` tags after the
+    title, and the country code before channel names, can be switched off in Settings.
   - `*` adds or removes the selected show as a favorite (matched by title, ignoring case and diacritics).
   - `K` / `J` (or Shift+Up / Shift+Down) move the selected channel up or down in the channel list. The order is
     remembered in `rxmltv.order` next to the settings file (delete it to go back to the file's order).
@@ -185,6 +188,15 @@ Run an update from cron with the saved settings, no terminal UI needed:
 ```
 30 4 * * * /usr/local/bin/rxmltv --config /etc/rxmltv.conf
 ```
+
+#### Genres in the XMLTV file
+
+Every `<category>` gets a capital first letter (`akční` becomes `Akční`). After each Czech genre that has a known
+translation, an English `<category lang="en">` is added, for example `Akční` followed by `Action`, `Dobrodružný`
+followed by `Adventure`. The server's own type (`Movie`, `Series`, `Documentary` ...) is already English and is not
+repeated. About 100 common genres are translated; others stay as they are. Turn the translations off with
+`--no-english-genres` or Settings > English genre names (the capitalisation stays). The Guide shows the Czech
+genres only, but the genre dot rules match either language, so `action` and `akční` both work as keywords.
 
 #### After an update: command and upload
 
@@ -209,7 +221,7 @@ If either fails, the guide is still written and the exit code is 3.
 
 The settings file is plain text, one `key = value` per line: `days`, `output`, `cache_dir`, `concurrency`,
 `groups`, repeated `channel`, the yes/no options `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
-`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, the display options `show_quality`,
+`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, `english_genres`, the display options `show_country`, `show_quality`,
 `show_new`, `show_rerun`, `guide_layout` (`list` or `grid`), `favorite_color`, repeated `genre_color = keyword = colour`, and `post_command` and the
 `upload_*` settings (`upload_after_update`, `upload_protocol`, `upload_host`, `upload_port`, `upload_user`,
 `upload_password`, `upload_folder`, `upload_name`, `upload_key`, `upload_key_passphrase`, `upload_insecure`).
