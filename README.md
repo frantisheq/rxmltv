@@ -1,0 +1,336 @@
+# rxmltv
+
+**English** · [Čeština](README.cs.md) · [Slovenčina](README.sk.md)
+
+Generates an [XMLTV](https://wiki.xmltv.org/) programme guide (EPG) for Czech and Slovak TV channels, for use with
+Kodi, Jellyfin, TVHeadend, Plex and similar. Downloaded files are cached on disk, so repeated runs only fetch what
+is new.
+
+This is the Rust port of the original C# tool, sharpxmltv. The command line and the output format are the same.
+
+## Install
+
+Download the archive for your system from the [Releases](../../releases) page and unpack it:
+
+| System  | CPU | File |
+|---------|-----|------|
+| Linux (static, any distribution) | x86-64 | `rxmltv-<version>-linux-x64.tar.gz` |
+| | ARM64 | `rxmltv-<version>-linux-arm64.tar.gz` |
+| | ARMv7 (32-bit, hard-float) | `rxmltv-<version>-linux-armv7.tar.gz` |
+| | RISC-V 64 | `rxmltv-<version>-linux-riscv64.tar.gz` |
+| | MIPS little-endian (mipsel, 32-bit) | `rxmltv-<version>-linux-mipsel.tar.gz` |
+| FreeBSD (built on 14, runs on 14.x and newer) | x86-64 | `rxmltv-<version>-freebsd-x64.tar.gz` |
+| | ARM64 | `rxmltv-<version>-freebsd-arm64.tar.gz` |
+| Windows | x86-64 | `rxmltv-<version>-win-x64.zip` |
+| | ARM64 | `rxmltv-<version>-win-arm64.zip` |
+| macOS | Apple Silicon | `rxmltv-<version>-macos-arm64.tar.gz` |
+| | Intel | `rxmltv-<version>-macos-x64.tar.gz` |
+
+**Debian, Ubuntu and relatives** (`.deb`) and **Fedora, RHEL, openSUSE and relatives** (`.rpm`) packages are
+published for x86-64, ARM64, ARMv7 (Debian `armhf`, RPM `armv7hl`), RISC-V 64 and mipsel as well:
+
+```sh
+sudo dpkg -i rxmltv_<version>_amd64.deb          # or: sudo apt install ./rxmltv_<version>_amd64.deb
+sudo rpm -i rxmltv-<version>-1.x86_64.rpm        # or: sudo dnf install ./rxmltv-<version>-1.x86_64.rpm
+```
+
+They install `rxmltv` into `/usr/bin` and the README (in English, Czech and Slovak) into `/usr/share/doc/rxmltv`. The binary is the same static
+build as the tar.gz, so the packages have no dependencies; `curl` is only recommended (it is used for uploads).
+Settings and the cache stay per user, in `~/.rxmltv`.
+
+The mipsel build is experimental: Rust has no prebuilt standard library for it, so it is built with nightly Rust and
+`-Zbuild-std`. If that build breaks, a release simply comes without the mipsel files. It is a static soft-float
+binary, which runs on every little-endian MIPS32r2 Linux system, with or without an FPU (including most OpenWrt
+routers). On 32-bit systems the counters in the end-of-run summary are 32-bit; nothing else differs.
+
+There is no RISC-V build for Windows, macOS or FreeBSD: Windows and macOS don't exist for RISC-V, and FreeBSD's
+RISC-V Rust target has no CI route yet.
+
+On macOS, a downloaded binary is quarantined by Gatekeeper. Clear that once after unpacking:
+`xattr -d com.apple.quarantine rxmltv`.
+
+`SHA256SUMS.txt` is published with every release. There is nothing else to install.
+
+## Usage
+
+```
+rxmltv [options]
+```
+
+| Option | Meaning |
+|--------|---------|
+| `--days <n>` | Days to download, starting today (default 7) |
+| `--output <file>` | Output file (default `xmltv.xml`). A name ending in `.gz` is written gzip-compressed |
+| `--cache-dir <dir>` | Cache folder (default `~/.rxmltv/cache`; a leading `~` is the home folder) |
+| `--lang <en\|cs\|sk>` | Language of the interface (default: from `LC_ALL` / `LANG`, else English) |
+| `--serve` | After the update, share the output file over HTTP until stopped with Ctrl+C (see below) |
+| `--no-update` | With `--serve`: do not update first, just share the existing file |
+| `--port <n>` | The port of the HTTP server (default 8080) |
+| `--bind <address>` | The address the HTTP server listens on (default `0.0.0.0`) |
+| `--no-slovak-genres` | Do not add Slovak names after the genres in the XMLTV file |
+| `--no-english-genres` | Do not add English names after the Czech genres in the XMLTV file (see below) |
+| `--compress-cache` | Store cache files gzip-compressed, and compress the existing ones, to save disk space |
+| `--purge-cache` | Delete every cached file first (also the channel list), then update |
+| `--clean-cache` | Delete cached files older than today, expired "no data" markers and leftover temp files |
+| `--concurrency <n>` | Parallel downloads (default 4) |
+| `--groups <a,b,c>` | Only these channel groups, by name or code, e.g. `"České,Slovenské"` or `cz,sk`. Default: all groups |
+| `--channels <a,b,c>` | Pick individual channels by XMLTV id, e.g. `cz-ct1-2,sk-markiza-7` (see `--list-channels`). `id=newid` writes the channel under a different XMLTV id, e.g. `cz-ct1-2=ct1.cz`. Combined with `--groups`, you get both selections |
+| `--channels-file <file>` | Same, one entry per line; lines starting with `#` are ignored, and after the id anything except `=newid` is ignored, so you can paste lines from `--list-channels` as they are. Can be repeated |
+| `--list-channels` | Print every channel (XMLTV id and name) so you know what to put in `--channels`, then exit |
+| `--strip-hd-tv` | Remove the separate words `HD` and `TV` from channel names and from the XMLTV ids built from them: `Nova HD` becomes `Nova`, `TV Barrandov` becomes `Barrandov`. Words that are part of a longer word (`HDTV`) are left alone. Ids given to `--channels` must then be the stripped ones, so use the same flag with `--list-channels` |
+| `--list-groups` | Print the groups the server offers with channel counts, then exit |
+| `--keep-title-numbers` | Keep `(3)`, `(2/6)` and roman season numbers in the title. Default: removed and written as `<episode-num>` |
+| `--keep-empty-channels` | Also write channels that have no programmes |
+| `--no-images` | Don't write programme poster `<icon>` elements |
+| `--config <file>` | Read the settings from a file first (written by `--tui`); options on the command line override it, `--channels` adds to the file's channels |
+| `--tui` | Open the terminal UI (see below) |
+| `--post-command <cmd>` | Run a shell command after a successful update; `{file}` is the output file |
+| `--upload` | Upload the output file after the update (server settings come from `--config` / `--tui`; needs `curl`) |
+| `--refresh-channels` | Download the channel list again instead of using the cached `channels.xml`, which is otherwise kept forever (`--clean-cache` does not touch it). If the download fails, the run stops; the old copy is already removed, so run it again |
+| `--retry-missing` | Ask the server again for items it had no data for (otherwise skipped for 12 hours) |
+| `-h`, `--help` | Show help |
+
+`--option=value` works as well as `--option value`.
+
+### Examples
+
+```sh
+# See which groups exist
+rxmltv --list-groups
+
+# Czech and Slovak channels, 7 days, compressed
+rxmltv --groups cz,sk --output /var/www/epg/guide.xml.gz
+
+# Tomorrow's guide only, tidy the cache first
+rxmltv --days 2 --clean-cache
+```
+
+Choose individual channels by their XMLTV id (the `id` used in the output; ignoring case):
+
+```sh
+rxmltv --list-channels                       # prints "cz-ct1-2  ČT1" and so on
+rxmltv --channels cz-ct1-2,cz-nova-5,sk-markiza-7
+rxmltv --groups sk --channels cz-nova-5      # all Slovak channels plus Nova
+rxmltv --channels-file my-channels.txt
+```
+
+`my-channels.txt` (pasting lines from `--list-channels` works, the name after the id is ignored):
+
+```
+# one XMLTV id per line
+cz-ct1-2
+cz-nova-5     Nova
+sk-markiza-7
+# "= newid" writes the channel under your own id (e.g. to match an existing EPG mapping)
+cz-prima-4 = prima.cz
+```
+
+The new id is written verbatim to the output (`<channel id="prima.cz">` and `<programme channel="prima.cz">`).
+It also works for channels that come in through `--groups`. Two channels must not end up with the same id;
+the program stops with an error if they do.
+
+Run it once or twice a day. For example with cron:
+
+```
+30 4 * * * /usr/local/bin/rxmltv --groups cz,sk --clean-cache --output /var/www/epg/guide.xml.gz
+```
+
+> **Note:** the first run can be slow. Every programme has its own detail file, so a full download of all channels
+> means tens of thousands of requests, and the cache starts empty. Later runs only fetch what is new and are much
+> faster, as long as you keep the same `--cache-dir`. To speed up the first run, limit it with `--groups` or
+> `--channels`, use fewer `--days`, or raise `--concurrency` a little (be considerate to the server). It is safe to
+> interrupt with Ctrl+C and start again: files already downloaded are kept.
+
+### Terminal UI
+
+```sh
+rxmltv --tui                    # settings are read from and saved to ~/.rxmltv/rxmltv.conf
+rxmltv --tui --config my.conf   # use another settings file
+```
+
+**Where files go:** everything rxmltv creates for its own use lives in the hidden folder `~/.rxmltv` (on Windows
+`%USERPROFILE%\.rxmltv`): `rxmltv.conf` (settings), `rxmltv.favorites`, `rxmltv.order` and the `cache/` folder.
+The generated guide (`--output`, default `xmltv.xml`) is written where you say. An `rxmltv.conf` left in the current
+folder by an earlier version is still used when `~/.rxmltv/rxmltv.conf` does not exist. The old default cache
+`data/cache/` is no longer used; delete it if it is still there.
+
+| | |
+|---|---|
+| **Guide**, list layout | **Guide**, grid layout |
+| ![The Guide tab in list layout: channels, one day of programmes, and details](docs/tui-guide.png) | ![The Guide tab in grid layout: one column per channel, details below](docs/tui-grid.png) |
+| **Favorites** | **Settings** |
+| ![The Favorites tab: favorite shows and their next airings](docs/tui-favorites.png) | ![The Settings tab: the updater's options as a menu](docs/tui-settings.png) |
+| **Update** | **Upload** |
+| ![The Update tab: progress bar, file counters and log](docs/tui-update.png) | ![The Upload tab: target, progress bar and log](docs/tui-upload.png) |
+
+Six tabs (`1`-`6` or F1-F6; `?` shows all keys; `q` quits):
+
+- **Guide**: browses the generated XMLTV file (`--output`, plain or `.gz`). Channels (with their upper-case country
+  code) on the left, one day's programmes on the right, details below. `Tab` changes pane, `←`/`→` change day,
+  `n` jumps to now (the list is scrolled so that a couple of programmes before it and what is on next are visible),
+  `p` jumps to primetime, `/` searches programme titles in every channel, `f` filters the channel list, `r` reloads.
+  - **Grid layout** (`v` switches, or Settings > Guide layout): one column per channel like a newspaper listing, with
+    the day's programmes (time and title) listed down each column and the details tab below. `←`/`→` pick the
+    channel, `↑`/`↓` the programme (the columns scroll together, so the same time stays level across channels),
+    `[`/`]` change day. Columns are at least 28 characters wide; as many as fit are shown.
+  - The programme list has columns: `>` for what is on now, a **favorite dot**, the time, the title. The
+    **genre dots** sit at the right border: one dot for every genre rule (Settings > Genre dot colours) that
+    matches the programme, so a crime series can show several. The `HDTV`, `NEW` and `RERUN` tags after the
+    title, and the country code before channel names, can be switched off in Settings.
+  - **Primetime** (Settings > Primetime, default 20:00): the programme that is on at that time is highlighted in
+    yellow in the list and the grid (switch off with Settings > Highlight primetime), and `p` jumps to it.
+  - `*` adds or removes the selected show as a favorite (matched by title, ignoring case and diacritics).
+  - `K` / `J` (or Shift+Up / Shift+Down) move the selected channel up or down in the channel list. The order is
+    remembered in `rxmltv.order` next to the settings file (delete it to go back to the file's order).
+- **Favorites**: the favorite shows (kept in `rxmltv.favorites`) with their upcoming airings from the loaded guide.
+  `Enter` shows the next airing in the Guide, `a` adds a title by hand, `d` removes one.
+- **Settings**: the updater's options as a menu: days, output file, cache folder, parallel downloads, flags,
+  a picker for channel groups and one for individual channels (with optional own XMLTV ids, like
+  `--channels id=newid`; `R` fetches the channel list again), the display options (tags, favorite colour,
+  an editor for the genre dot colours: keyword and colour, first match wins, and it lists the genres found in your
+  guide), the command to run after an update, and the upload settings. `s` saves the settings. The panel below
+  shows the same settings as a command line and as `rxmltv --config <file>`.
+- **Update**: runs the update (then the command and the upload, if set) with a progress bar, file counters and log;
+  `x` cancels. The guide reloads when it finishes.
+- **Upload**: sends the output file to the server now, with a progress bar and log; `x` cancels.
+- **Share**: starts and stops the HTTP server that shares the output file (see below).
+
+Run an update from cron with the saved settings, no terminal UI needed:
+
+```
+30 4 * * * /usr/local/bin/rxmltv --config /etc/rxmltv.conf
+```
+
+#### Sharing the guide over HTTP
+
+rxmltv can serve the generated file itself, so a media server, a TV box or another computer can fetch it from a URL:
+
+```sh
+rxmltv --serve                      # update, then share http://<this computer>:8080/xmltv.xml
+rxmltv --serve --no-update --port 9000   # just share the existing file, on port 9000
+rxmltv --serve --bind 127.0.0.1     # only this computer may connect
+```
+
+It prints the addresses to use and logs each request; Ctrl+C stops it. In the terminal UI, Settings > Share over HTTP
+(`tui_serve = true` in the settings file) shares the file while the UI is open; the **Share** tab (`6`) shows the
+addresses, a request log, and `s` starts or stops it. A changed port or address restarts it at once.
+
+- The server answers `GET` and `HEAD` for exactly one file, named after the output file (`/xmltv.xml`, `/epg.xml.gz`),
+  and a small index page at `/`. It cannot be asked for any other file. A `.gz` output is served as `application/gzip`.
+- It understands `If-None-Match` and `If-Modified-Since`, so a client that polls only downloads a guide that changed.
+  The file is read for every request, so an update that finishes while the server runs is shared at once.
+- **There is no password and no TLS.** Anyone who can reach the port can download the guide. Keep it on a trusted
+  network, or use `--bind 127.0.0.1` behind a reverse proxy (nginx, Caddy) for access control and https. Ports
+  below 1024 usually need extra rights.
+- `--serve` is deliberately not a settings-file option, so a `--config` file can never turn a cron job into a server
+  that does not end. For a permanent service use a systemd unit, for example
+  `ExecStart=/usr/bin/rxmltv --config /etc/rxmltv.conf --serve --no-update`, and update with cron or a timer.
+
+#### Language
+
+The terminal UI and the messages of a run are available in **English, Czech and Slovak**. The language comes from
+the environment (`LC_ALL`, `LC_MESSAGES`, `LANG`: `cs_CZ.UTF-8` gives Czech, `sk_SK.UTF-8` Slovak, anything else English)
+unless you choose it: `--lang cs`, `language = cs` in the settings file, or Settings > Language (it changes the whole
+interface at once). Weekday and month names follow the language, and so do the **genre names** in the Guide: with
+Czech or Slovak you see the genres in that language, with English the English names (genres that are not in the
+built-in list are shown as the server gives them). `--help` and the messages about wrong command-line arguments
+stay English.
+
+#### Genres in the XMLTV file
+
+Every `<category>` gets a capital first letter (`akční` becomes `Akční`). After each genre that has a known
+translation, an English `<category lang="en">` and a Slovak `<category lang="sk">` are added, for example `Akční`
+followed by `Action` and `Akčný`, `Dobrodružný` followed by `Adventure` (the Slovak word is the same, so it is not
+repeated). The server's own type (`Movie`, `Series`, `Documentary` ...) is English; it gets a Slovak name (`Film`,
+`Seriál`, `Dokumentárny`) and is not repeated in English. About 70 common genres are translated; others stay as they
+are. Turn the translations off with `--no-english-genres` / `--no-slovak-genres` or in Settings (the capitalisation
+stays). The Guide shows each genre in the interface language (see Language above), and the genre dot rules match
+any of the languages, so `action`, `akční` and `akčný` all work as keywords.
+
+#### After an update: command and upload
+
+Both work from the terminal UI and from the command line (`--post-command`, `--upload`, or the settings file).
+After a successful update rxmltv first runs the command, then uploads. If the command fails, the upload is skipped.
+If either fails, the guide is still written and the exit code is 3.
+
+- **Command**: run by the shell (`sh -c`, or `cmd /C` on Windows). `{file}` in it becomes the path of the output
+  file (quoted), which is also in the `RXMLTV_OUTPUT` environment variable. What it prints goes to the log.
+  Example: `--post-command 'xmltv-tool --in {file} --out /srv/epg/final.xml'`.
+- **Upload**: FTP, FTPS (FTP with TLS), SFTP (SSH) and WebDAV (`webdav` = http, `webdavs` = https), with user
+  name, password, port, folder, file name on the server, and for SFTP an SSH key file (chosen with a file browser in
+  the UI) and its passphrase. The transfer is done by the **`curl`** program, which must be installed (Windows 10+
+  has it). This keeps rxmltv free of TLS and SSH code. Secrets are given to curl on its standard input, never on its
+  command line.
+  - The password is stored in the settings file as plain text (the file gets mode 600 on Linux/macOS). Leave
+    it empty and set `RXMLTV_UPLOAD_PASSWORD` to keep it out of the file.
+  - A folder with a leading `/` is an absolute path (FTP, SFTP); otherwise it is relative to the login folder.
+    FTP and SFTP folders are created if missing; WebDAV folders must exist.
+  - "Skip certificate check" turns off TLS certificate verification (FTPS, https) and the SSH host key check (SFTP).
+    Without it, an SFTP server must be in your `known_hosts` (connect once with `ssh` or `sftp` to add it).
+
+The settings file is plain text, one `key = value` per line: `days`, `output`, `cache_dir`, `concurrency`,
+`groups`, repeated `channel`, the yes/no options `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
+`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, `english_genres`, `slovak_genres`, `tui_serve`, `serve_port`, `serve_bind`, `language` (`en`, `cs` or `sk`), the display options `show_country`, `show_quality`,
+`show_new`, `show_rerun`, `primetime` (`HH:MM`), `highlight_primetime`, `guide_layout` (`list` or `grid`), `favorite_color`, repeated `genre_color = keyword = colour`, and `post_command` and the
+`upload_*` settings (`upload_after_update`, `upload_protocol`, `upload_host`, `upload_port`, `upload_user`,
+`upload_password`, `upload_folder`, `upload_name`, `upload_key`, `upload_key_passphrase`, `upload_insecure`).
+Colours are names (`red`, `orange`, `lightblue` ...) or `#rrggbb`.
+
+The UI is a build feature that is on by default. `cargo build --release --no-default-features` leaves it out.
+
+### Group codes
+
+Channel ids in the output look like `cz-ct1-2` (`<group code>-<name>-<id>`). Known groups get a short code:
+`cz` (České), `sk`, `en`, `de`, `pl`, `fr`, `hu`, `it`, `ru`, `es`, and `others` (Ostatní). Any other group uses its own
+name in lower-case ASCII. Group names are matched ignoring case and diacritics.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Channel list could not be loaded, no channels matched, or a fatal error |
+| 2 | Bad command line |
+| 3 | The guide was written, but the post-update command or the upload failed |
+| 130 | Cancelled (Ctrl+C / SIGTERM). Temporary files are removed |
+
+## How it works
+
+- Downloads the channel list, then for every channel and day the programme listing and a detail file per programme.
+- Everything is cached in `--cache-dir`. A `.miss` file marks something the server had no data for; it is not asked
+  for again for 12 hours (`--retry-missing` overrides this).
+- A detail file that belongs to a different programme than the listing entry (stale cache, schedule changed) is fetched
+  again and ignored if it is still wrong.
+- Structured data (cast, director, year, genre, rating, flags such as HD / premiere / rerun) is used first. Text parsing
+  of titles and descriptions only fills in what is missing.
+- Programme times are written with the real Europe/Prague UTC offset for that date.
+- Memory use stays flat: channels are processed a few at a time and written to a temporary file as they finish.
+
+## Building from source
+
+Needs Rust 1.80 or newer.
+
+```sh
+cargo test
+cargo build --release      # binary: target/release/rxmltv
+```
+
+On FreeBSD: `pkg install rust`, then the same commands.
+
+The default build has no C dependencies, so it cross-compiles easily (CI uses `cargo zigbuild` for the Linux ARM64 and
+RISC-V builds). It talks plain `http://`, which is what the server uses. If the server ever redirects to https, build
+with `cargo build --release --features tls`.
+
+## Releases (maintainers)
+
+GitHub Actions (`.github/workflows/build.yml`) builds for Linux, FreeBSD, Windows and macOS on every push to
+`main`. To publish a release, bump `version` in `Cargo.toml`, then:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow attaches all archives, the `.deb` and `.rpm` packages (built with
+[nfpm](https://nfpm.goreleaser.com/) from `packaging/nfpm.yaml`) and `SHA256SUMS.txt` to a new GitHub release.
+Before the first release, set the real `maintainer` and `license` in `packaging/nfpm.yaml`.
