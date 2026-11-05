@@ -45,6 +45,16 @@ enum Item {
     HighlightPrimetime,
     FavoriteColor,
     GenreColors,
+    NotifyColor,
+    NotifyPopup,
+    NotifySound,
+    NotifyApprise,
+    AppriseCommand,
+    AppriseUrls,
+    NotifyMinutes,
+    NotifyRepeat,
+    NotifyScope,
+    NotifyTest,
     PostCommand,
     UploadAuto,
     UploadProtocol,
@@ -60,13 +70,15 @@ enum Item {
     TuiServe,
     ServePort,
     ServeBind,
+    UpdateTimes,
+    ServiceServe,
     Save,
     Run,
     UploadNow,
     PurgeCache,
 }
 
-const ITEMS: [Item; 45] = [
+const ITEMS: [Item; 57] = [
     Item::Language,
     Item::Days,
     Item::Output,
@@ -93,6 +105,16 @@ const ITEMS: [Item; 45] = [
     Item::HighlightPrimetime,
     Item::FavoriteColor,
     Item::GenreColors,
+    Item::NotifyColor,
+    Item::NotifyPopup,
+    Item::NotifySound,
+    Item::NotifyApprise,
+    Item::AppriseCommand,
+    Item::AppriseUrls,
+    Item::NotifyMinutes,
+    Item::NotifyRepeat,
+    Item::NotifyScope,
+    Item::NotifyTest,
     Item::PostCommand,
     Item::UploadAuto,
     Item::UploadProtocol,
@@ -108,6 +130,8 @@ const ITEMS: [Item; 45] = [
     Item::TuiServe,
     Item::ServePort,
     Item::ServeBind,
+    Item::UpdateTimes,
+    Item::ServiceServe,
     Item::Save,
     Item::Run,
     Item::UploadNow,
@@ -143,6 +167,16 @@ impl Item {
             Item::HighlightPrimetime => t!("Highlight primetime"),
             Item::FavoriteColor => t!("Favorite dot colour"),
             Item::GenreColors => t!("Genre dot colours"),
+            Item::NotifyColor => t!("Notification colour"),
+            Item::NotifyPopup => t!("Notifications: popup"),
+            Item::NotifySound => t!("Notifications: sound"),
+            Item::NotifyApprise => t!("Notifications: Apprise"),
+            Item::AppriseCommand => t!("Apprise command"),
+            Item::AppriseUrls => t!("Apprise URLs"),
+            Item::NotifyMinutes => t!("Notify minutes before"),
+            Item::NotifyRepeat => t!("Notify: repeat"),
+            Item::NotifyScope => t!("Notify: channels"),
+            Item::NotifyTest => t!("Send a test notification"),
             Item::PostCommand => t!("Command after update"),
             Item::UploadAuto => t!("Upload after update"),
             Item::UploadProtocol => t!("Upload: protocol"),
@@ -158,6 +192,8 @@ impl Item {
             Item::TuiServe => t!("Share over HTTP"),
             Item::ServePort => t!("HTTP port"),
             Item::ServeBind => t!("HTTP address"),
+            Item::UpdateTimes => t!("Update times (service)"),
+            Item::ServiceServe => t!("Service: share over HTTP"),
             Item::Save => t!("Save settings"),
             Item::Run => t!("Run the update now"),
             Item::UploadNow => t!("Upload now"),
@@ -193,6 +229,16 @@ impl Item {
             Item::HighlightPrimetime => t!("Highlight the programme that is on at primetime in the Guide (list and grid)."),
             Item::FavoriteColor => t!("The colour of the dot before the time of a favorite show. A colour name (red, orange ...) or #rrggbb."),
             Item::GenreColors => t!("Enter opens the editor: which genre gets which dot colour (shown at the right edge of the programme list)."),
+            Item::NotifyColor => t!("The colour of the dot before the time of a programme that has a notification. A colour name or #rrggbb."),
+            Item::NotifyPopup => t!("Show a notification window in the terminal UI when a programme is about to start (Enter closes it)."),
+            Item::NotifySound => t!("Sound a terminal bell with each notification in the terminal UI."),
+            Item::NotifyApprise => t!("Also send each notification through Apprise (https://appriseit.com/). This works in the service mode too, with nobody logged in. Needs the apprise program."),
+            Item::AppriseCommand => t!("The Apprise program, with options if you need them, e.g. apprise --tag family or apprise --config /etc/apprise.yml."),
+            Item::AppriseUrls => t!("Apprise notification URLs, separated by spaces or commas (e.g. tgram://..., mailto://...). Empty: use Apprise's own configuration. Saved as plain text in the settings file."),
+            Item::NotifyMinutes => t!("Default minutes before a programme starts that the notification comes (1 to 1440). Each notification can have its own. Left/Right change it by one."),
+            Item::NotifyRepeat => t!("For new notifications: once (the first time the programme shows up) or every time it shows up in the guide. Enter or Left/Right change it."),
+            Item::NotifyScope => t!("For new notifications: only the channel you pressed b on, or all channels. Enter or Left/Right change it."),
+            Item::NotifyTest => t!("Send a test notification the way the settings above say (popup, sound, Apprise)."),
             Item::PostCommand => t!("A shell command run after a successful update, before the upload. {file} is the output file (also in $RXMLTV_OUTPUT). Empty: none."),
             Item::UploadAuto => t!("Upload the output file to the server below after every update. The Upload tab can always upload by hand. Needs the curl program."),
             Item::UploadProtocol => t!("ftp, ftps (FTP with TLS), sftp (over SSH), webdav (http) or webdavs (https). Enter or Left/Right change it."),
@@ -208,6 +254,8 @@ impl Item {
             Item::TuiServe => t!("Share the output file over HTTP while the terminal UI is open (see the Share tab). To share without the UI, run rxmltv --serve."),
             Item::ServePort => t!("The port of the HTTP server (1 to 65535). Ports below 1024 usually need extra rights. Changes apply at once."),
             Item::ServeBind => t!("The address the HTTP server listens on: 0.0.0.0 (all IPv4 networks), :: (all, including IPv6) or 127.0.0.1 (only this computer). The file is public to everyone who can reach it."),
+            Item::UpdateTimes => t!("Service mode: the times of day (HH:MM, separated by commas) when the guide is updated, e.g. 04:30, 16:00. Empty: no scheduled update. A missed update is made up when the service starts."),
+            Item::ServiceServe => t!("Service mode: also share the output file over HTTP (port and address as above)."),
             Item::Save => t!("Write these settings to the settings file. `rxmltv --config <file>` then uses them without the terminal UI."),
             Item::Run => t!("Start the update with the settings as they are now (saved or not), then the command and upload if set."),
             Item::UploadNow => t!("Upload the output file now, with a progress bar on the Upload tab."),
@@ -216,7 +264,7 @@ impl Item {
     }
 
     fn is_action(self) -> bool {
-        matches!(self, Item::Save | Item::Run | Item::UploadNow | Item::PurgeCache)
+        matches!(self, Item::Save | Item::Run | Item::UploadNow | Item::PurgeCache | Item::NotifyTest)
     }
 
     fn is_flag(self) -> bool {
@@ -240,6 +288,10 @@ impl Item {
                 | Item::UploadAuto
                 | Item::UploadInsecure
                 | Item::TuiServe
+                | Item::NotifyPopup
+                | Item::NotifySound
+                | Item::NotifyApprise
+                | Item::ServiceServe
         )
     }
 
@@ -253,6 +305,11 @@ impl Item {
                 | Item::Concurrency
                 | Item::FavoriteColor
                 | Item::Primetime
+                | Item::NotifyColor
+                | Item::AppriseCommand
+                | Item::AppriseUrls
+                | Item::NotifyMinutes
+                | Item::UpdateTimes
                 | Item::PostCommand
                 | Item::UploadHost
                 | Item::UploadPort
@@ -292,6 +349,10 @@ fn flag_ref(item: Item, o: &mut Options) -> Option<&mut bool> {
         Item::UploadAuto => Some(&mut o.upload.enabled),
         Item::UploadInsecure => Some(&mut o.upload.insecure),
         Item::TuiServe => Some(&mut o.tui_serve),
+        Item::NotifyPopup => Some(&mut o.notify_popup),
+        Item::NotifySound => Some(&mut o.notify_sound),
+        Item::NotifyApprise => Some(&mut o.notify_apprise),
+        Item::ServiceServe => Some(&mut o.service_serve),
         _ => None,
     }
 }
@@ -316,6 +377,10 @@ fn flag_get(item: Item, o: &Options) -> bool {
         Item::UploadAuto => o.upload.enabled,
         Item::UploadInsecure => o.upload.insecure,
         Item::TuiServe => o.tui_serve,
+        Item::NotifyPopup => o.notify_popup,
+        Item::NotifySound => o.notify_sound,
+        Item::NotifyApprise => o.notify_apprise,
+        Item::ServiceServe => o.service_serve,
         _ => false,
     }
 }
@@ -340,6 +405,13 @@ fn text_of(item: Item, o: &Options) -> String {
         Item::UploadPassphrase => o.upload.key_passphrase.clone(),
         Item::ServePort => o.serve_port.to_string(),
         Item::ServeBind => o.serve_bind.clone(),
+        Item::NotifyColor => o.ui.notify_color.clone(),
+        Item::AppriseCommand => o.apprise_command.clone(),
+        Item::AppriseUrls => o.apprise_urls.clone(),
+        Item::NotifyMinutes => o.notify_minutes.to_string(),
+        Item::UpdateTimes => {
+            o.update_times.iter().map(|m| crate::config::format_clock(*m)).collect::<Vec<_>>().join(", ")
+        }
         _ => String::new(),
     }
 }
@@ -347,6 +419,7 @@ fn text_of(item: Item, o: &Options) -> String {
 /// What the menu shows after the label.
 fn value_text(item: Item, o: &Options) -> String {
     let flag = |on: bool| (if on { "[x]" } else { "[ ]" }).to_string();
+    let or_none = |text: String| if text.is_empty() { t!("(none)").to_string() } else { text };
     let or_unset = |text: String| if text.is_empty() { t!("(not set)").to_string() } else { text };
     match item {
         Item::Language => o.language.name().to_string(),
@@ -408,8 +481,22 @@ fn value_text(item: Item, o: &Options) -> String {
         | Item::HighlightPrimetime
         | Item::UploadAuto
         | Item::UploadInsecure
-        | Item::TuiServe => flag(flag_get(item, o)),
-        Item::Save | Item::Run | Item::UploadNow | Item::PurgeCache => String::new(),
+        | Item::TuiServe
+        | Item::NotifyPopup
+        | Item::NotifySound
+        | Item::NotifyApprise
+        | Item::ServiceServe => flag(flag_get(item, o)),
+        Item::NotifyRepeat => o.notify_repeat.label().to_string(),
+        Item::NotifyScope => o.notify_scope.label().to_string(),
+        Item::NotifyMinutes => t!("{minutes} min", minutes = o.notify_minutes),
+        Item::NotifyColor => text_of(item, o),
+        Item::AppriseCommand => text_of(item, o),
+        Item::AppriseUrls => match crate::notify::split_urls(&o.apprise_urls).len() {
+            0 => t!("(not set)").to_string(),
+            n => t!("{count} URL(s)", count = n),
+        },
+        Item::UpdateTimes => or_none(text_of(item, o)),
+        Item::Save | Item::Run | Item::UploadNow | Item::PurgeCache | Item::NotifyTest => String::new(),
     }
 }
 
@@ -442,7 +529,7 @@ fn commit(item: Item, text: &str, o: &mut Options) -> Result<(), String> {
     };
     match item {
         Item::Days => o.days = crate::parse_positive(t!("Days"), text)?,
-        Item::Concurrency => o.concurrency = crate::parse_positive(t!("Parallel downloads"), text)? as usize,
+        Item::Concurrency => o.concurrency = crate::parse_concurrency(t!("Parallel downloads"), text)?,
         Item::Output => o.output = not_empty(t!("The output file name"))?,
         Item::CacheDir => o.cache_dir = not_empty(t!("The cache folder"))?,
         Item::FavoriteColor => {
@@ -454,6 +541,30 @@ fn commit(item: Item, text: &str, o: &mut Options) -> Result<(), String> {
         Item::Primetime => {
             o.ui.primetime = crate::config::parse_clock(text)
                 .ok_or_else(|| t!("The time must be HH:MM, for example 20:00.").to_string())?;
+        }
+        Item::NotifyColor => {
+            if !config::valid_color(text) {
+                return Err(t!("Not a colour: use a name like red, orange, lightblue, or #rrggbb.").to_string());
+            }
+            o.ui.notify_color = text.to_ascii_lowercase();
+        }
+        Item::AppriseCommand => o.apprise_command = not_empty(t!("The Apprise command"))?,
+        Item::AppriseUrls => o.apprise_urls = text.to_string(),
+        Item::NotifyMinutes => {
+            o.notify_minutes = text
+                .parse::<u32>()
+                .ok()
+                .filter(|m| (1..=1440).contains(m))
+                .ok_or_else(|| t!("The number of minutes must be from 1 to 1440.").to_string())?;
+        }
+        Item::UpdateTimes => {
+            let mut times = Vec::new();
+            for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                times.push(
+                    config::parse_clock(part).ok_or_else(|| t!("Times must look like 04:30, 16:00.").to_string())?,
+                );
+            }
+            o.update_times = times;
         }
         Item::PostCommand => o.post_command = text.to_string(),
         Item::UploadHost => o.upload.host = text.to_string(),
@@ -613,9 +724,14 @@ impl SettingsTab {
     fn adjust(&mut self, o: &mut Options, delta: i64) {
         match self.selected() {
             Item::Days => o.days = (i64::from(o.days) + delta).clamp(1, 365) as u32,
-            Item::Concurrency => o.concurrency = (o.concurrency as i64 + delta).clamp(1, 64) as usize,
+            Item::Concurrency => {
+                o.concurrency = (o.concurrency as i64 + delta).clamp(1, crate::MAX_CONCURRENCY as i64) as usize
+            }
             Item::UploadProtocol => o.upload.protocol = o.upload.protocol.step(delta as i32),
             Item::GuideLayout => o.ui.grid_layout = !o.ui.grid_layout,
+            Item::NotifyMinutes => o.notify_minutes = (i64::from(o.notify_minutes) + delta).clamp(1, 1440) as u32,
+            Item::NotifyRepeat => o.notify_repeat = o.notify_repeat.flip(),
+            Item::NotifyScope => o.notify_scope = o.notify_scope.flip(),
             Item::Language => {
                 o.language = o.language.step(delta as i32);
                 crate::i18n::set(o.language); // the whole interface switches at once
@@ -646,13 +762,14 @@ impl SettingsTab {
                 self.files = Some(FilePicker::open(&o.upload.key_file));
                 Action::None
             }
-            Item::UploadProtocol | Item::GuideLayout | Item::Language => {
+            Item::UploadProtocol | Item::GuideLayout | Item::Language | Item::NotifyRepeat | Item::NotifyScope => {
                 self.adjust(o, 1);
                 Action::None
             }
             Item::Save => Action::SaveConfig,
             Item::Run => Action::StartUpdate,
             Item::UploadNow => Action::StartUpload,
+            Item::NotifyTest => Action::TestNotification,
             Item::PurgeCache => {
                 if armed {
                     Action::PurgeCache
@@ -796,6 +913,10 @@ mod tests {
         assert_eq!(o.days, 3); // unchanged after a mistake
         assert!(commit(Item::Concurrency, " 8 ", &mut o).is_ok());
         assert_eq!(o.concurrency, 8);
+        // typing cannot go beyond what the arrow keys allow
+        assert!(commit(Item::Concurrency, "64", &mut o).is_ok());
+        assert!(commit(Item::Concurrency, "65", &mut o).is_err());
+        assert_eq!(o.concurrency, 64);
     }
 
     #[test]

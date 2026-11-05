@@ -1,16 +1,16 @@
 mod config;
+mod service;
 mod enrichment;
 mod fetcher;
 mod genres;
 mod groups;
 mod i18n;
-#[cfg(feature = "tui")]
 mod guide;
 mod output;
 mod progress;
 mod serve;
 mod stats;
-#[cfg(feature = "tui")]
+mod notify;
 mod store;
 mod upload;
 #[cfg(feature = "tui")]
@@ -60,6 +60,8 @@ const USAGE: &str = r##"Usage: rxmltv [options]
   --no-images         Don't write poster <icon> elements
   --retry-missing     Ask the server again for items it had no data for (otherwise skipped for 12 h)
   --lang <code>       Language of the interface: en, cs or sk (default: from the environment)
+  --service           Run as a service (no terminal UI): update at the times set in the settings (update_times),
+                      send Apprise notifications, and share over HTTP if service_serve is on; see docs/SERVICE.md
   --serve             After the update, share the output file over HTTP until stopped (Ctrl+C)
   --no-update         With --serve: do not update first, just share the existing file
   --port <n>          The port of the HTTP server (default 8080)
@@ -110,6 +112,23 @@ pub struct Options {
     pub tui_serve: bool,
     pub serve_port: u16,
     pub serve_bind: String,
+    /// Run as a service: update at the set times, share over HTTP if asked, send notifications (command line only).
+    pub service: bool,
+    /// The times of day (minutes since midnight) the service updates at.
+    pub update_times: Vec<u32>,
+    /// The service also shares the output file over HTTP.
+    pub service_serve: bool,
+    pub notify_popup: bool,
+    pub notify_sound: bool,
+    pub notify_apprise: bool,
+    /// The `apprise` program, with options if needed.
+    pub apprise_command: String,
+    /// Apprise notification URLs (spaces or commas between them); empty: use Apprise's own configuration.
+    pub apprise_urls: String,
+    /// Default minutes before the start of a programme.
+    pub notify_minutes: u32,
+    pub notify_repeat: notify::Repeat,
+    pub notify_scope: notify::Scope,
     /// Write a Slovak <category> after each genre that has a known translation.
     pub slovak_genres: bool,
     /// The language of the terminal UI and of the run messages.
@@ -150,6 +169,17 @@ impl Default for Options {
             tui_serve: false,
             serve_port: 8080,
             serve_bind: "0.0.0.0".to_string(),
+            service: false,
+            update_times: vec![4 * 60],
+            service_serve: false,
+            notify_popup: true,
+            notify_sound: false,
+            notify_apprise: false,
+            apprise_command: "apprise".to_string(),
+            apprise_urls: String::new(),
+            notify_minutes: 5,
+            notify_repeat: notify::Repeat::Once,
+            notify_scope: notify::Scope::ThisChannel,
             slovak_genres: true,
             language: i18n::Lang::detect(),
             strip_hd_tv: false,
@@ -238,7 +268,7 @@ async fn main() -> ExitCode {
         return start_tui(opts);
     }
 
-    let serving = opts.serve;
+    let serving = opts.serve || opts.service;
     tokio::select! {
         result = run_cli(opts) => match result {
             Ok(code) => ExitCode::from(code),
@@ -262,6 +292,13 @@ async fn main() -> ExitCode {
 
 /// The update (unless `--no-update`), then, with `--serve`, sharing the output file until the program is stopped.
 async fn run_cli(opts: Options) -> Result<u8, BoxError> {
+    if opts.service {
+        let config_path = match &opts.config_path {
+            Some(path) => std::path::PathBuf::from(path),
+            None => config::default_path(),
+        };
+        return service::run(opts, config_path).await;
+    }
     if !opts.serve {
         return run_all(opts).await;
     }
@@ -345,6 +382,17 @@ fn take_value(name: &str, inline: Option<&str>, args: &[String], i: &mut usize) 
     Err(format!("{name} needs a value."))
 }
 
+/// The most parallel downloads: what the arrow keys in the terminal UI stop at, so no other way may go beyond it.
+pub const MAX_CONCURRENCY: usize = 64;
+
+pub(crate) fn parse_concurrency(name: &str, value: &str) -> Result<usize, String> {
+    let n = parse_positive(name, value)? as usize;
+    if n > MAX_CONCURRENCY {
+        return Err(t!("{name} must be at most {max}.", name = name, max = MAX_CONCURRENCY));
+    }
+    Ok(n)
+}
+
 pub(crate) fn parse_positive(name: &str, value: &str) -> Result<u32, String> {
     if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
         if let Ok(n) = value.parse::<u32>() {
@@ -422,6 +470,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--compress-cache" => o.compress_cache = true,
             "--no-english-genres" => o.english_genres = false,
             "--serve" => o.serve = true,
+            "--service" => o.service = true,
             "--no-update" => o.no_update = true,
             "--port" => {
                 let value = take_value(name, inline, args, &mut i)?;
@@ -478,7 +527,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             }
             "--days" => o.days = parse_positive(name, &take_value(name, inline, args, &mut i)?)?,
             "--concurrency" => {
-                o.concurrency = parse_positive(name, &take_value(name, inline, args, &mut i)?)? as usize
+                o.concurrency = parse_concurrency(name, &take_value(name, inline, args, &mut i)?)?
             }
             "--output" => o.output = take_value(name, inline, args, &mut i)?,
             "--cache-dir" => o.cache_dir = take_value(name, inline, args, &mut i)?,

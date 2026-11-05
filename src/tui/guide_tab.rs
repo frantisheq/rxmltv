@@ -16,7 +16,8 @@ use super::{border_style, centered, fit, parse_color, selected_style, Action};
 use crate::groups::normalize;
 use crate::config::UiOptions;
 use crate::guide::{self, Guide, GuideChannel, GuideProgramme};
-use crate::store::{self, Favorites};
+use crate::notify::Rules;
+use crate::store::{self, title_key, Favorites};
 use crate::t;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -112,8 +113,8 @@ fn selection(len: usize) -> ListState {
 
 /// The narrowest a grid column gets (borders included).
 const GRID_MIN_COLUMN: u16 = 28;
-/// Characters before the title in a grid entry: favorite dot, time, space.
-const GRID_PREFIX: usize = 7;
+/// Characters before the title in a grid entry: notification dot, time, space, favorite dot, space.
+const GRID_PREFIX: usize = 9;
 
 /// One programme in a grid column: its position in the channel's programmes, and its title wrapped to the column.
 struct GridEntry {
@@ -468,6 +469,15 @@ impl GuideTab {
                     return Action::ToggleFavorite(programme.title.clone());
                 }
             }
+            KeyCode::Char('b') | KeyCode::Char('!') => {
+                if let Some((channel, programme)) = self.selected_programme() {
+                    return Action::ToggleNotification {
+                        title: programme.title.clone(),
+                        channel_id: channel.id.clone(),
+                        channel_name: channel.name.clone(),
+                    };
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-10),
@@ -734,7 +744,7 @@ impl GuideTab {
 
     // ---------- drawing ----------
 
-    pub fn draw(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, ui: &UiOptions) {
+    pub fn draw(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, rules: &Rules, ui: &UiOptions) {
         self.primetime = ui.primetime;
         self.highlight_primetime = ui.highlight_primetime;
         if self.loading {
@@ -765,7 +775,7 @@ impl GuideTab {
             let [head, grid, details] =
                 Layout::vertical([Constraint::Length(3), Constraint::Percentage(62), Constraint::Min(6)]).areas(area);
             self.draw_header(f, head);
-            self.draw_grid(f, grid, favs, ui);
+            self.draw_grid(f, grid, favs, rules, ui);
             self.draw_details(f, details);
 
             if let (Mode::Filter(input), true) = (&self.mode, grid.height >= 3) {
@@ -790,7 +800,7 @@ impl GuideTab {
 
         self.draw_channels(f, left, ui);
         self.draw_header(f, head);
-        self.draw_programmes(f, programmes, favs, ui);
+        self.draw_programmes(f, programmes, favs, rules, ui);
         self.draw_details(f, details);
 
         if let (Mode::Search(search), Some(g)) = (&mut self.mode, &self.guide) {
@@ -887,7 +897,7 @@ impl GuideTab {
         f.render_widget(Paragraph::new(Line::from(spans)).block(Block::bordered()), area);
     }
 
-    fn draw_programmes(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, ui: &UiOptions) {
+    fn draw_programmes(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, rules: &Rules, ui: &UiOptions) {
         let focused = self.focus == Focus::Programmes;
         let list = self.day_list();
         let now = Utc::now().timestamp();
@@ -923,24 +933,32 @@ impl GuideTab {
                         Style::new()
                     };
 
-                    // columns: on-now marker, favorite dot, time, title; the genre dots sit at the right border
-                    let favorite = if favs.contains(&p.title) {
+                    // columns: on-now marker, notification dot, time, favorite dot, title; the genre dots sit at
+                    // the right border
+                    let key = title_key(&p.title);
+                    let favorite = if favs.contains_key(&key) {
                         Span::styled("●", Style::new().fg(parse_color(&ui.favorite_color)))
+                    } else {
+                        Span::raw(" ")
+                    };
+                    let notified = if rules.matches(&key, &channel.id) {
+                        Span::styled("●", Style::new().fg(parse_color(&ui.notify_color)))
                     } else {
                         Span::raw(" ")
                     };
                     let dots = genre_dots(ui, &p.genres);
                     let dots_width = dots.len() * 2; // a dot and a space after it
-                    let prefix = 9; // marker, favorite dot, " HH:MM "
+                    let prefix = 11; // marker, notification dot, " HH:MM ", favorite dot, space
                     let room = inner.saturating_sub(prefix + dots_width + usize::from(!dots.is_empty()));
                     let shown = fit(&title, room);
                     let pad = inner.saturating_sub(prefix + shown.chars().count() + dots_width);
 
                     let mut spans = vec![
                         Span::styled(if is_now { ">" } else { " " }, style),
-                        favorite,
+                        notified,
                         Span::styled(format!(" {} ", p.start.format("%H:%M")), style),
-                        Span::styled(shown, style),
+                        favorite,
+                        Span::styled(format!(" {shown}"), style),
                         Span::raw(" ".repeat(pad)),
                     ];
                     for color in dots {
@@ -967,7 +985,7 @@ impl GuideTab {
     }
 
     /// The newspaper layout: one column per channel, the day's programmes listed down each column.
-    fn draw_grid(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, ui: &UiOptions) {
+    fn draw_grid(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, rules: &Rules, ui: &UiOptions) {
         let total = self.visible.len();
         if total == 0 {
             f.render_widget(Paragraph::new(t!("No channel matches the filter.")).block(Block::bordered()), area);
@@ -1067,14 +1085,22 @@ impl GuideTab {
                         break;
                     }
                     let mut spans: Vec<Span<'static>> = if n == 0 {
-                        let favorite = if favs.contains(&p.title) {
+                        let key = title_key(&p.title);
+                        let favorite = if favs.contains_key(&key) {
                             Span::styled("●", style.fg(parse_color(&ui.favorite_color)))
                         } else {
                             Span::styled(" ", style)
                         };
+                        let notified = if rules.matches(&key, &channel.id) {
+                            Span::styled("●", style.fg(parse_color(&ui.notify_color)))
+                        } else {
+                            Span::styled(" ", style)
+                        };
                         vec![
-                            favorite,
+                            notified,
                             Span::styled(p.start.format("%H:%M").to_string(), style),
+                            Span::styled(" ", style),
+                            favorite,
                             Span::styled(format!(" {text}"), style),
                         ]
                     } else {

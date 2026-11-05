@@ -1,0 +1,51 @@
+#!/bin/sh
+#
+# PROVIDE: rxmltv
+# REQUIRE: NETWORKING DAEMON
+# KEYWORD: shutdown
+#
+# rxmltv as an rc.d service, run by an unprivileged user.
+#
+#   pw useradd rxmltv -d /var/db/rxmltv -m -s /usr/sbin/nologin -c "rxmltv service"
+#   install -m 555 rxmltv /usr/local/etc/rc.d/rxmltv
+#   sysrc rxmltv_enable=YES
+#   (edit /var/db/rxmltv/.rxmltv/rxmltv.conf, see rxmltv.conf.example; own it: chown -R rxmltv /var/db/rxmltv)
+#   service rxmltv start
+#
+# Optional settings in /etc/rc.conf (or with sysrc):
+#   rxmltv_user="rxmltv"            the user it runs as
+#   rxmltv_home="/var/db/rxmltv"    its home: settings live in $HOME/.rxmltv
+#   rxmltv_program="/usr/local/bin/rxmltv"
+#   rxmltv_args="--service"         extra arguments, e.g. "--service --config /usr/local/etc/rxmltv.conf"
+#   rxmltv_log="/var/log/rxmltv.log"
+
+. /etc/rc.subr
+
+name="rxmltv"
+rcvar="rxmltv_enable"
+
+load_rc_config $name
+
+: ${rxmltv_enable:="NO"}
+: ${rxmltv_user:="rxmltv"}
+: ${rxmltv_home:="/var/db/rxmltv"}
+: ${rxmltv_program:="/usr/local/bin/rxmltv"}
+: ${rxmltv_args:="--service"}
+: ${rxmltv_log:="/var/log/rxmltv.log"}
+
+pidfile="/var/run/${name}.pid"
+procname="${rxmltv_program}"
+command="/usr/sbin/daemon"
+# daemon -r restarts the program if it stops; -P is the pid file of that supervisor
+command_args="-r -R 30 -P ${pidfile} -u ${rxmltv_user} -o ${rxmltv_log} /usr/bin/env HOME=${rxmltv_home} ${rxmltv_program} ${rxmltv_args}"
+
+start_precmd="${name}_prestart"
+
+rxmltv_prestart()
+{
+    install -d -o "${rxmltv_user}" -m 755 "${rxmltv_home}"
+    touch "${rxmltv_log}"
+    chown "${rxmltv_user}" "${rxmltv_log}"
+}
+
+run_rc_command "$1"

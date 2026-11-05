@@ -1,5 +1,6 @@
 //! Small files the terminal UI keeps next to the settings file: the favorite shows and the channel order.
 //! Both are plain text, one entry per line, and are written as soon as something changes.
+#![cfg_attr(not(feature = "tui"), allow(dead_code))]
 
 use std::collections::HashSet;
 use std::fs;
@@ -64,6 +65,11 @@ impl Favorites {
 
     pub fn contains(&self, title: &str) -> bool {
         self.keys.contains(&title_key(title))
+    }
+
+    /// Like `contains`, for a title that is already normalized.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.keys.contains(key)
     }
 
     fn save(&self) -> Result<(), String> {

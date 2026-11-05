@@ -79,6 +79,8 @@ pub struct UiOptions {
     pub favorite_color: String,
     /// Show the country code before channel names.
     pub show_country: bool,
+    /// The colour of the dot before the time of a programme that has a notification.
+    pub notify_color: String,
     /// When prime time starts, in minutes since midnight (20:00 = 1200).
     pub primetime: u32,
     /// Highlight the programme that is on at prime time in the Guide.
@@ -98,6 +100,7 @@ impl Default for UiOptions {
             show_rerun: true,
             favorite_color: "orange".to_string(),
             show_country: true,
+            notify_color: "lightcyan".to_string(),
             primetime: 20 * 60,
             highlight_primetime: true,
             grid_layout: false,
@@ -194,7 +197,7 @@ pub fn parse(text: &str) -> Result<Options, String> {
         match key.as_str() {
             "days" => o.days = crate::parse_positive("days", value).map_err(|m| at(number, m))?,
             "concurrency" => {
-                o.concurrency = crate::parse_positive("concurrency", value).map_err(|m| at(number, m))? as usize
+                o.concurrency = crate::parse_concurrency("concurrency", value).map_err(|m| at(number, m))?
             }
             "output" => o.output = text_value("output")?,
             "cache_dir" => o.cache_dir = text_value("cache_dir")?,
@@ -230,6 +233,42 @@ pub fn parse(text: &str) -> Result<Options, String> {
             }
             "english_genres" => o.english_genres = flag("english_genres")?,
             "tui_serve" => o.tui_serve = flag("tui_serve")?,
+            "service_serve" => o.service_serve = flag("service_serve")?,
+            "update_times" => {
+                let mut times = Vec::new();
+                for part in value.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                    times.push(parse_clock(part).ok_or_else(|| {
+                        at(number, format!("update_times: \"{part}\" is not a time like 04:30."))
+                    })?);
+                }
+                o.update_times = times;
+            }
+            "notify_popup" => o.notify_popup = flag("notify_popup")?,
+            "notify_sound" => o.notify_sound = flag("notify_sound")?,
+            "notify_apprise" => o.notify_apprise = flag("notify_apprise")?,
+            "apprise_command" => o.apprise_command = text_value("apprise_command")?,
+            "apprise_urls" => o.apprise_urls = value.to_string(),
+            "notify_minutes" => {
+                o.notify_minutes = value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|m| (1..=1440).contains(m))
+                    .ok_or_else(|| at(number, "notify_minutes must be a number from 1 to 1440.".to_string()))?;
+            }
+            "notify_repeat" => {
+                o.notify_repeat = crate::notify::Repeat::parse(value)
+                    .ok_or_else(|| at(number, "notify_repeat must be once or always.".to_string()))?;
+            }
+            "notify_scope" => {
+                o.notify_scope = crate::notify::Scope::parse(value)
+                    .ok_or_else(|| at(number, "notify_scope must be channel or all.".to_string()))?;
+            }
+            "notify_color" => {
+                if !valid_color(value) {
+                    return Err(at(number, format!("\"{value}\" is not a colour (a name like red, or #rrggbb).")));
+                }
+                o.ui.notify_color = value.to_string();
+            }
             "serve_port" => {
                 o.serve_port = value
                     .parse::<u16>()
@@ -333,6 +372,20 @@ pub fn to_text(o: &Options) -> String {
     let _ = writeln!(s, "english_genres = {}", o.english_genres);
     let _ = writeln!(s, "\n# Sharing the output file over HTTP (rxmltv --serve, or while the terminal UI is open)");
     let _ = writeln!(s, "tui_serve = {}", o.tui_serve);
+    let _ = writeln!(s, "\n# Running as a service (rxmltv --service): update at these times of day, also share over HTTP");
+    let times: Vec<String> = o.update_times.iter().map(|m| format_clock(*m)).collect();
+    let _ = writeln!(s, "update_times = {}", times.join(", "));
+    let _ = writeln!(s, "service_serve = {}", o.service_serve);
+    let _ = writeln!(s, "\n# Notifications about programmes (Apprise: https://appriseit.com/)");
+    let _ = writeln!(s, "notify_popup = {}", o.notify_popup);
+    let _ = writeln!(s, "notify_sound = {}", o.notify_sound);
+    let _ = writeln!(s, "notify_apprise = {}", o.notify_apprise);
+    let _ = writeln!(s, "apprise_command = {}", o.apprise_command);
+    let _ = writeln!(s, "apprise_urls = {}", o.apprise_urls);
+    let _ = writeln!(s, "notify_minutes = {}", o.notify_minutes);
+    let _ = writeln!(s, "notify_repeat = {}", o.notify_repeat.code());
+    let _ = writeln!(s, "notify_scope = {}", o.notify_scope.code());
+    let _ = writeln!(s, "notify_color = {}", o.ui.notify_color);
     let _ = writeln!(s, "serve_port = {}", o.serve_port);
     let _ = writeln!(s, "serve_bind = {}", o.serve_bind);
     let _ = writeln!(s, "slovak_genres = {}", o.slovak_genres);
@@ -378,7 +431,7 @@ pub fn save(path: &Path, o: &Options) -> io::Result<()> {
     let tmp = with_suffix(path, ".tmp");
     fs::write(&tmp, to_text(o))?;
     #[cfg(unix)]
-    if !o.upload.password.is_empty() || !o.upload.key_passphrase.is_empty() {
+    if !o.upload.password.is_empty() || !o.upload.key_passphrase.is_empty() || !o.apprise_urls.is_empty() {
         // the file holds a password: only its owner may read it
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
@@ -611,6 +664,59 @@ mod tests {
         assert_eq!(channel_request(&o, "sk-markiza-3").unwrap().new_id, None);
         toggle_channel(&mut o, "cz-nova-2");
         assert_eq!(o.channels.len(), 1);
+    }
+
+    #[test]
+    fn the_example_service_settings_are_valid() {
+        let o = parse(include_str!("../packaging/service/rxmltv.conf.example")).unwrap();
+        assert_eq!(o.update_times, vec![270]);
+        assert!(o.service_serve && o.notify_apprise);
+        assert_eq!(o.groups, Some(vec!["cz".to_string(), "sk".to_string()]));
+        assert_eq!(o.serve_port, 8080);
+    }
+
+    #[test]
+    fn concurrency_has_a_ceiling() {
+        assert_eq!(parse("concurrency = 64").unwrap().concurrency, 64);
+        assert!(parse("concurrency = 65").unwrap_err().contains("at most 64"));
+        assert!(parse("concurrency = 0").is_err());
+    }
+
+    #[test]
+    fn service_and_notification_settings_are_saved() {
+        let mut o = Options::default();
+        assert_eq!(o.update_times, vec![240]);
+        assert_eq!((o.notify_minutes, o.notify_popup, o.notify_apprise), (5, true, false));
+
+        o.update_times = vec![4 * 60 + 30, 16 * 60];
+        o.service_serve = true;
+        o.notify_sound = true;
+        o.notify_apprise = true;
+        o.apprise_command = "apprise --tag family".to_string();
+        o.apprise_urls = "tgram://token/chat, mailto://me@example.com".to_string();
+        o.notify_minutes = 10;
+        o.notify_repeat = crate::notify::Repeat::Always;
+        o.notify_scope = crate::notify::Scope::AllChannels;
+        o.ui.notify_color = "#00ffaa".to_string();
+
+        let back = parse(&to_text(&o)).unwrap();
+        assert_eq!(back.update_times, vec![270, 960]);
+        assert!(back.service_serve && back.notify_sound && back.notify_apprise);
+        assert_eq!(back.apprise_command, "apprise --tag family");
+        assert_eq!(back.apprise_urls, o.apprise_urls);
+        assert_eq!(back.notify_minutes, 10);
+        assert_eq!(back.notify_repeat, crate::notify::Repeat::Always);
+        assert_eq!(back.notify_scope, crate::notify::Scope::AllChannels);
+        assert_eq!(back.ui.notify_color, "#00ffaa");
+
+        // no scheduled update at all is allowed
+        o.update_times.clear();
+        assert!(parse(&to_text(&o)).unwrap().update_times.is_empty());
+
+        assert!(parse("update_times = 04:30, soon").is_err());
+        assert!(parse("notify_minutes = 0").is_err());
+        assert!(parse("notify_repeat = sometimes").is_err());
+        assert!(parse("notify_scope = nowhere").is_err());
     }
 
     #[test]

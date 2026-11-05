@@ -1,0 +1,25 @@
+# rxmltv as a service of your own user: no root needed.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp rxmltv-user.service ~/.config/systemd/user/rxmltv.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now rxmltv
+#   journalctl --user -u rxmltv -f
+#
+# A user service stops when you log out. To keep it running after logout, and to start it at boot:
+#   sudo loginctl enable-linger "$USER"
+#
+# Settings are read from ~/.rxmltv/rxmltv.conf. Edit ExecStart if rxmltv is somewhere else (e.g. %h/.local/bin/rxmltv).
+[Unit]
+Description=rxmltv: XMLTV guide updater, HTTP server and notifications
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rxmltv --service
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

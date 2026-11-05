@@ -64,6 +64,7 @@ rxmltv [volby]
 | `--output <soubor>` | Výstupní soubor (výchozí `xmltv.xml`). Název končící na `.gz` se zapíše komprimovaně (gzip) |
 | `--cache-dir <složka>` | Složka mezipaměti (výchozí `~/.rxmltv/cache`; úvodní `~` je domovská složka) |
 | `--lang <en\|cs\|sk>` | Jazyk rozhraní (výchozí: podle `LC_ALL` / `LANG`, jinak angličtina) |
+| `--service` | Běh jako služba bez terminálového rozhraní: aktualizuje v časech z `update_times`, posílá oznámení přes Apprise a sdílí přes HTTP, je-li zapnuto `service_serve` (viz níže a `docs/SERVICE.md`) |
 | `--serve` | Po aktualizaci sdílet výstupní soubor přes HTTP, dokud nestisknete Ctrl+C (viz níže) |
 | `--no-update` | S `--serve`: neaktualizovat, jen sdílet existující soubor |
 | `--port <n>` | Port serveru HTTP (výchozí 8080) |
@@ -73,7 +74,7 @@ rxmltv [volby]
 | `--compress-cache` | Ukládat soubory mezipaměti komprimované (gzip) a zkomprimovat i existující, aby se ušetřilo místo na disku |
 | `--purge-cache` | Nejdřív smazat všechny soubory z mezipaměti (i seznam stanic), pak aktualizovat |
 | `--clean-cache` | Smazat soubory z mezipaměti starší než dnes, prošlé značky „žádná data“ a zbylé dočasné soubory |
-| `--concurrency <n>` | Počet souběžných stahování (výchozí 4) |
+| `--concurrency <n>` | Počet souběžných stahování, 1 až 64 (výchozí 4) |
 | `--groups <a,b,c>` | Jen tyto skupiny stanic, podle názvu nebo kódu, např. `"České,Slovenské"` nebo `cz,sk`. Výchozí: všechny skupiny |
 | `--channels <a,b,c>` | Vybrat jednotlivé stanice podle XMLTV id, např. `cz-ct1-2,sk-markiza-7` (viz `--list-channels`). `id=noveid` zapíše stanici pod jiným XMLTV id, např. `cz-ct1-2=ct1.cz`. V kombinaci s `--groups` dostanete oba výběry |
 | `--channels-file <soubor>` | Totéž, jedna položka na řádek; řádky začínající `#` se ignorují a za id se ignoruje vše kromě `=noveid`, takže řádky z `--list-channels` můžete vložit tak, jak jsou. Lze opakovat |
@@ -166,7 +167,7 @@ v aktuální složce starší verzí se dál používá, pokud `~/.rxmltv/rxmltv
 
 (Snímky obrazovky ukazují anglické rozhraní.)
 
-Šest karet (`1`-`6` nebo F1-F6; `?` ukáže všechny klávesy; `q` ukončí):
+Sedm karet (`1`-`7` nebo F1-F7; `?` ukáže všechny klávesy; `q` ukončí):
 
 - **Program**: prohlíží vygenerovaný soubor XMLTV (`--output`, prostý nebo `.gz`). Vlevo stanice (s kódem země
   velkými písmeny), vpravo pořady jednoho dne, dole podrobnosti. `Tab` mění panel, `←`/`→` mění den,
@@ -176,13 +177,15 @@ v aktuální složce starší verzí se dál používá, pokud `~/.rxmltv/rxmltv
     přehledu, pořady dne (čas a název) jsou vypsány pod sebou v každém sloupci a podrobnosti jsou dole. `←`/`→`
     vybírají stanici, `↑`/`↓` pořad (sloupce se posouvají společně, takže stejný čas zůstává u všech stanic
     na stejné úrovni), `[`/`]` mění den. Sloupce jsou široké nejméně 28 znaků; zobrazí se, kolik se jich vejde.
-  - Seznam pořadů má sloupce: `>` pro to, co běží teď, **tečku oblíbeného**, čas, název. **Tečky žánrů** jsou
+  - Seznam pořadů má sloupce: `>` pro to, co běží teď, **tečku oznámení** (barva v Nastavení), čas,
+    **tečku oblíbeného**, název. **Tečky žánrů** jsou
     u pravého okraje: jedna tečka za každé pravidlo žánru (Nastavení > Barvy teček žánrů), které na pořad
     sedí, takže detektivní seriál jich může mít několik. Štítky `HDTV`, `NEW` a `RERUN` za názvem
     a kód země před názvy stanic lze v Nastavení vypnout.
   - **Hlavní vysílací čas** (Nastavení > Hlavní vysílací čas, výchozí 20:00): pořad, který v tu dobu běží, je v seznamu
     i v mřížce zvýrazněn žlutě (vypnete v Nastavení > Zvýrazňovat hlavní vysílací čas) a klávesa `p` na něj skočí.
   - `*` přidá nebo odebere vybraný pořad z oblíbených (porovnává se podle názvu, bez ohledu na velikost písmen a diakritiku).
+  - `b` přidá nebo odebere oznámení pro vybraný pořad (viz Oznámení níže).
   - `K` / `J` (nebo Shift+Nahoru / Shift+Dolů) posunou vybranou stanici v seznamu stanic nahoru nebo dolů. Pořadí se
     pamatuje v `rxmltv.order` vedle souboru nastavení (smažte ho, chcete-li se vrátit k pořadí ze souboru).
 - **Oblíbené**: oblíbené pořady (uložené v `rxmltv.favorites`) s jejich nejbližším vysíláním z načteného programu.
@@ -197,6 +200,7 @@ v aktuální složce starší verzí se dál používá, pokud `~/.rxmltv/rxmltv
   `x` ji zruší. Po dokončení se program znovu načte.
 - **Nahrání**: odešle výstupní soubor na server hned, s ukazatelem průběhu a záznamem; `x` zruší.
 - **Sdílení**: spouští a zastavuje server HTTP, který sdílí výstupní soubor (viz níže).
+- **Oznámení**: seznam pořadů, které vám dají vědět, i s jejich volbami (viz níže).
 
 Aktualizaci z cronu s uloženým nastavením spustíte bez terminálového rozhraní:
 
@@ -228,6 +232,44 @@ adresy a záznam požadavků a `s` sdílení spouští a zastavuje. Změněný p
 - `--serve` záměrně není volbou souboru nastavení, takže soubor z `--config` nikdy nemůže změnit úlohu v cronu v server,
   který neskončí. Pro trvalou službu použijte jednotku systemd, například
   `ExecStart=/usr/bin/rxmltv --config /etc/rxmltv.conf --serve --no-update`, a aktualizujte pomocí cronu nebo časovače.
+
+#### Oznámení
+
+Pořad vám může dát vědět před začátkem. Stiskněte `b` u pořadu v programu (nebo přidejte název na kartě
+**Oznámení**, `7`) a rxmltv vás upozorní `notify_minutes` (výchozí 5) minut před začátkem:
+
+- jako **vyskakovací okno** v terminálovém rozhraní (zavře se klávesou Enter), případně se **zvukem** (pípnutí terminálu);
+- a/nebo přes [Apprise](https://appriseit.com/), které dosáhne na Telegram, e-mail, Discord, Pushover, ntfy a asi sto dalších
+  služeb. Nainstalujte `apprise`, zadejte adresy v Nastavení > Adresy Apprise (nebo nechte `apprise_command` použít vlastní
+  konfiguraci Apprise), zapněte Oznámení: Apprise a vyzkoušejte Nastavení > Poslat zkušební oznámení.
+
+Každé oznámení má na kartě Oznámení vlastní volby: **jednou** (při prvním výskytu pořadu v programu) nebo **pokaždé**,
+když se objeví, **tato stanice** nebo **všechny stanice**, a minuty před začátkem (prázdné = výchozí). Nová oznámení
+berou výchozí hodnoty z Nastavení (Oznámení: opakování, Oznámení: stanice, Oznámit minut předem). Oznámení „jednou“ je po
+oznámení hotové (`R` ho znovu aktivuje). Pořady s oznámením mají před časem barevnou tečku (Nastavení > Barva oznámení).
+Seznam se ukládá do `~/.rxmltv/rxmltv.notifications`, co už bylo oznámeno, do `~/.rxmltv/rxmltv.notified`.
+
+Oznámení přes Apprise fungují i při běhu rxmltv jako služby, bez přihlášeného uživatele (níže). Pokud běží terminálové
+rozhraní i služba, oznámí pořad ten, kdo si ho všimne první; rozhraní přesto ukáže své okno.
+
+#### Běh jako služba
+
+`rxmltv --service` běží bez terminálového rozhraní, dokud ho nezastavíte. Aktualizuje program v časech z `update_times`
+(výchozí `04:00`, místní čas; aktualizace zmeškaná při vypnutém počítači se dohoní při spuštění služby), sdílí ho přes HTTP,
+je-li `service_serve = true`, a posílá oznámení přes Apprise. Zůstává na popředí: spouští a hlídá ho systemd, launchd, rc.d
+nebo Windows.
+
+Podrobné postupy, ukázkové soubory služby a příklad nastavení jsou v **[docs/SERVICE.md](docs/SERVICE.md)** (anglicky)
+a v [`packaging/service/`](packaging/service/): Linux (systemd, jako systémová služba s vlastním uživatelem nebo jako služba
+vlastního uživatele bez root), macOS (launchd agent a daemon), FreeBSD (rc.d a cron bez root), Windows (Plánovač úloh bez
+administrátora, nebo skutečná služba přes NSSM) a OpenRC. Například služba vlastního uživatele na Linuxu:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp packaging/service/systemd/rxmltv-user.service ~/.config/systemd/user/rxmltv.service
+systemctl --user enable --now rxmltv
+sudo loginctl enable-linger "$USER"      # nechá ji běžet i po odhlášení
+```
 
 #### Jazyk
 
@@ -273,7 +315,7 @@ Pokud selže cokoli z toho, program je přesto zapsán a návratový kód je 3.
 
 Soubor nastavení je prostý text, jeden `klíč = hodnota` na řádek: `days`, `output`, `cache_dir`, `concurrency`,
 `groups`, opakované `channel`, volby ano/ne `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
-`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, `english_genres`, `slovak_genres`, `tui_serve`, `serve_port`, `serve_bind`, `language` (`en`, `cs` nebo `sk`), volby zobrazení `show_country`, `show_quality`,
+`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, `english_genres`, `slovak_genres`, `tui_serve`, `serve_port`, `serve_bind`, `update_times`, `service_serve`, `notify_popup`, `notify_sound`, `notify_apprise`, `apprise_command`, `apprise_urls`, `notify_minutes`, `notify_repeat`, `notify_scope`, `notify_color`, `language` (`en`, `cs` nebo `sk`), volby zobrazení `show_country`, `show_quality`,
 `show_new`, `show_rerun`, `primetime` (`HH:MM`), `highlight_primetime`, `guide_layout` (`list` nebo `grid`), `favorite_color`, opakované `genre_color = klíčové slovo = barva`, a `post_command` a
 nastavení `upload_*` (`upload_after_update`, `upload_protocol`, `upload_host`, `upload_port`, `upload_user`,
 `upload_password`, `upload_folder`, `upload_name`, `upload_key`, `upload_key_passphrase`, `upload_insecure`).

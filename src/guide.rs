@@ -1,4 +1,5 @@
 //! Reads an XMLTV file (plain or gzip) into memory so the terminal UI can browse it.
+#![cfg_attr(not(feature = "tui"), allow(dead_code))]
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;

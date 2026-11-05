@@ -1,0 +1,2 @@
+# systemd-sysusers: creates the user the system service runs as (sudo systemd-sysusers /usr/lib/sysusers.d/rxmltv.conf)
+u rxmltv - "rxmltv service" /var/lib/rxmltv /usr/sbin/nologin

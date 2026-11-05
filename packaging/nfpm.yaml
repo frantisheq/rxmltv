@@ -23,6 +23,26 @@ contents:
     dst: /usr/share/doc/rxmltv/README.md
     file_info:
       mode: 0644
+  - src: packaging/service/systemd/rxmltv.service
+    dst: /usr/lib/systemd/system/rxmltv.service
+    file_info:
+      mode: 0644
+  - src: packaging/service/systemd/rxmltv-user.service
+    dst: /usr/lib/systemd/user/rxmltv.service
+    file_info:
+      mode: 0644
+  - src: packaging/service/systemd/rxmltv.sysusers
+    dst: /usr/lib/sysusers.d/rxmltv.conf
+    file_info:
+      mode: 0644
+  - src: docs/SERVICE.md
+    dst: /usr/share/doc/rxmltv/SERVICE.md
+    file_info:
+      mode: 0644
+  - src: packaging/service/rxmltv.conf.example
+    dst: /usr/share/doc/rxmltv/rxmltv.conf.example
+    file_info:
+      mode: 0644
   - src: README.cs.md
     dst: /usr/share/doc/rxmltv/README.cs.md
     file_info:
@@ -31,6 +51,9 @@ contents:
     dst: /usr/share/doc/rxmltv/README.sk.md
     file_info:
       mode: 0644
+
+scripts:
+  postinstall: packaging/scripts/postinstall.sh
 
 # Uploading (FTP, FTPS, SFTP, WebDAV) is done by curl. Everything else works without it.
 recommends:

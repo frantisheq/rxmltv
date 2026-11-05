@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+# rxmltv as an OpenRC service (Alpine, Gentoo ...), run by an unprivileged user.
+#
+#   adduser -S -h /var/lib/rxmltv -s /sbin/nologin rxmltv          (Alpine; Gentoo: useradd -r -m -d /var/lib/rxmltv rxmltv)
+#   install -m 755 rxmltv.initd /etc/init.d/rxmltv
+#   (edit /var/lib/rxmltv/.rxmltv/rxmltv.conf, see rxmltv.conf.example; chown -R rxmltv /var/lib/rxmltv)
+#   rc-update add rxmltv default && rc-service rxmltv start
+#   tail -f /var/log/rxmltv.log
+
+description="rxmltv: XMLTV guide updater, HTTP server and notifications"
+supervisor="supervise-daemon"
+command="/usr/bin/env"
+command_args="HOME=/var/lib/rxmltv /usr/bin/rxmltv --service"
+command_user="rxmltv"
+output_log="/var/log/rxmltv.log"
+error_log="/var/log/rxmltv.log"
+respawn_delay=30
+
+depend() {
+    need net
+}
+
+start_pre() {
+    checkpath --directory --owner rxmltv /var/lib/rxmltv
+    checkpath --file --owner rxmltv /var/log/rxmltv.log
+}

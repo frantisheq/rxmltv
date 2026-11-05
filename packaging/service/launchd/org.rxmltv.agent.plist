@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  rxmltv as a launchd agent of your own user (no root). It starts when you log in and is restarted if it stops.
+
+    mkdir -p ~/Library/LaunchAgents ~/Library/Logs
+    cp org.rxmltv.agent.plist ~/Library/LaunchAgents/
+    # edit the paths below (rxmltv, and /Users/YOURNAME)
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.rxmltv.agent.plist
+    launchctl print gui/$(id -u)/org.rxmltv.agent        (state)
+    launchctl bootout gui/$(id -u)/org.rxmltv.agent      (stop and remove)
+    tail -f ~/Library/Logs/rxmltv.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.rxmltv.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/rxmltv</string>
+        <string>--service</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/YOURNAME</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>/Users/YOURNAME/Library/Logs/rxmltv.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOURNAME/Library/Logs/rxmltv.log</string>
+</dict>
+</plist>

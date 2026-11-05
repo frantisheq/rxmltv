@@ -1,0 +1,40 @@
+# rxmltv as a system service, run by its own unprivileged user.
+#
+#   sudo useradd --system --create-home --home-dir /var/lib/rxmltv --shell /usr/sbin/nologin rxmltv
+#   sudo cp rxmltv.service /etc/systemd/system/
+#   sudoedit /var/lib/rxmltv/.rxmltv/rxmltv.conf        (see rxmltv.conf.example)
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rxmltv
+#   journalctl -u rxmltv -f
+#
+# The packages (.deb, .rpm) install this file in /usr/lib/systemd/system and create the user.
+# To use the terminal UI with the service's settings and notification list:
+#   sudo -u rxmltv env HOME=/var/lib/rxmltv rxmltv --tui
+[Unit]
+Description=rxmltv: XMLTV guide updater, HTTP server and notifications
+Documentation=file:///usr/share/doc/rxmltv/SERVICE.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rxmltv
+Group=rxmltv
+Environment=HOME=/var/lib/rxmltv
+WorkingDirectory=/var/lib/rxmltv
+StateDirectory=rxmltv
+ExecStart=/usr/bin/rxmltv --service
+Restart=on-failure
+RestartSec=30
+
+# Hardening. rxmltv only needs its own folder, the network, and (for Apprise) to run another program.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/rxmltv
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

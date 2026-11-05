@@ -12,6 +12,8 @@ use std::sync::{Mutex, MutexGuard};
 const MAX_LOG_LINES: usize = 1000;
 
 static QUIET: AtomicBool = AtomicBool::new(false);
+/// Service mode: lines with a time stamp, no `(3/84) Nova` progress line.
+static PLAIN: AtomicBool = AtomicBool::new(false);
 static DONE: AtomicUsize = AtomicUsize::new(0);
 static TOTAL: AtomicUsize = AtomicUsize::new(0);
 static CURRENT: Mutex<String> = Mutex::new(String::new());
@@ -23,6 +25,19 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 fn quiet() -> bool {
     QUIET.load(Ordering::Relaxed)
+}
+
+/// For a log file or the journal: every message on its own line with the time, and no progress line.
+pub fn set_plain(value: bool) {
+    PLAIN.store(value, Ordering::Relaxed);
+}
+
+fn plain() -> bool {
+    PLAIN.load(Ordering::Relaxed)
+}
+
+fn stamp(text: &str) -> String {
+    format!("{} {text}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))
 }
 
 /// In quiet mode nothing is printed; messages go to the in-memory log instead.
@@ -43,6 +58,8 @@ pub fn info(text: impl Into<String>) {
     let text = text.into();
     if quiet() {
         push(text);
+    } else if plain() {
+        eprintln!("{}", stamp(&text));
     } else {
         eprintln!("{text}");
     }
@@ -54,6 +71,8 @@ pub fn warn(text: impl Into<String>) {
     let text = text.into();
     if quiet() {
         push(text);
+    } else if plain() {
+        eprintln!("{}", stamp(&text));
     } else {
         eprintln!("\n{text}");
     }
@@ -81,7 +100,7 @@ pub fn step(done: usize, total: usize, name: &str) {
         let mut current = lock(&CURRENT);
         current.clear();
         current.push_str(name);
-    } else {
+    } else if !plain() {
         let line = format!("\r({done}/{total}) {name}");
         eprint!("{line:<70}");
     }
@@ -89,7 +108,7 @@ pub fn step(done: usize, total: usize, name: &str) {
 
 /// Ends the `(3/120) Nova` line.
 pub fn end_steps() {
-    if !quiet() {
+    if !quiet() && !plain() {
         eprintln!();
     }
 }

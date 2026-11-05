@@ -63,6 +63,7 @@ rxmltv [options]
 | `--output <file>` | Output file (default `xmltv.xml`). A name ending in `.gz` is written gzip-compressed |
 | `--cache-dir <dir>` | Cache folder (default `~/.rxmltv/cache`; a leading `~` is the home folder) |
 | `--lang <en\|cs\|sk>` | Language of the interface (default: from `LC_ALL` / `LANG`, else English) |
+| `--service` | Run as a service, without the terminal UI: update at the times in `update_times`, send Apprise notifications, share over HTTP if `service_serve` is on (see below and `docs/SERVICE.md`) |
 | `--serve` | After the update, share the output file over HTTP until stopped with Ctrl+C (see below) |
 | `--no-update` | With `--serve`: do not update first, just share the existing file |
 | `--port <n>` | The port of the HTTP server (default 8080) |
@@ -72,7 +73,7 @@ rxmltv [options]
 | `--compress-cache` | Store cache files gzip-compressed, and compress the existing ones, to save disk space |
 | `--purge-cache` | Delete every cached file first (also the channel list), then update |
 | `--clean-cache` | Delete cached files older than today, expired "no data" markers and leftover temp files |
-| `--concurrency <n>` | Parallel downloads (default 4) |
+| `--concurrency <n>` | Parallel downloads, 1 to 64 (default 4) |
 | `--groups <a,b,c>` | Only these channel groups, by name or code, e.g. `"České,Slovenské"` or `cz,sk`. Default: all groups |
 | `--channels <a,b,c>` | Pick individual channels by XMLTV id, e.g. `cz-ct1-2,sk-markiza-7` (see `--list-channels`). `id=newid` writes the channel under a different XMLTV id, e.g. `cz-ct1-2=ct1.cz`. Combined with `--groups`, you get both selections |
 | `--channels-file <file>` | Same, one entry per line; lines starting with `#` are ignored, and after the id anything except `=newid` is ignored, so you can paste lines from `--list-channels` as they are. Can be repeated |
@@ -163,7 +164,7 @@ folder by an earlier version is still used when `~/.rxmltv/rxmltv.conf` does not
 | **Update** | **Upload** |
 | ![The Update tab: progress bar, file counters and log](docs/tui-update.png) | ![The Upload tab: target, progress bar and log](docs/tui-upload.png) |
 
-Six tabs (`1`-`6` or F1-F6; `?` shows all keys; `q` quits):
+Seven tabs (`1`-`7` or F1-F7; `?` shows all keys; `q` quits):
 
 - **Guide**: browses the generated XMLTV file (`--output`, plain or `.gz`). Channels (with their upper-case country
   code) on the left, one day's programmes on the right, details below. `Tab` changes pane, `←`/`→` change day,
@@ -173,13 +174,15 @@ Six tabs (`1`-`6` or F1-F6; `?` shows all keys; `q` quits):
     the day's programmes (time and title) listed down each column and the details tab below. `←`/`→` pick the
     channel, `↑`/`↓` the programme (the columns scroll together, so the same time stays level across channels),
     `[`/`]` change day. Columns are at least 28 characters wide; as many as fit are shown.
-  - The programme list has columns: `>` for what is on now, a **favorite dot**, the time, the title. The
+  - The programme list has columns: `>` for what is on now, a **notification dot** (colour in Settings), the time,
+    a **favorite dot**, the title. The
     **genre dots** sit at the right border: one dot for every genre rule (Settings > Genre dot colours) that
     matches the programme, so a crime series can show several. The `HDTV`, `NEW` and `RERUN` tags after the
     title, and the country code before channel names, can be switched off in Settings.
   - **Primetime** (Settings > Primetime, default 20:00): the programme that is on at that time is highlighted in
     yellow in the list and the grid (switch off with Settings > Highlight primetime), and `p` jumps to it.
   - `*` adds or removes the selected show as a favorite (matched by title, ignoring case and diacritics).
+  - `b` adds or removes a notification for the selected show (see Notifications below).
   - `K` / `J` (or Shift+Up / Shift+Down) move the selected channel up or down in the channel list. The order is
     remembered in `rxmltv.order` next to the settings file (delete it to go back to the file's order).
 - **Favorites**: the favorite shows (kept in `rxmltv.favorites`) with their upcoming airings from the loaded guide.
@@ -194,6 +197,7 @@ Six tabs (`1`-`6` or F1-F6; `?` shows all keys; `q` quits):
   `x` cancels. The guide reloads when it finishes.
 - **Upload**: sends the output file to the server now, with a progress bar and log; `x` cancels.
 - **Share**: starts and stops the HTTP server that shares the output file (see below).
+- **Notifications**: the list of programmes that notify you, with their options (see below).
 
 Run an update from cron with the saved settings, no terminal UI needed:
 
@@ -225,6 +229,45 @@ addresses, a request log, and `s` starts or stops it. A changed port or address 
 - `--serve` is deliberately not a settings-file option, so a `--config` file can never turn a cron job into a server
   that does not end. For a permanent service use a systemd unit, for example
   `ExecStart=/usr/bin/rxmltv --config /etc/rxmltv.conf --serve --no-update`, and update with cron or a timer.
+
+#### Notifications
+
+A programme can notify you before it starts. Press `b` on a programme in the Guide (or add a title on the
+**Notifications** tab, `7`) and rxmltv tells you `notify_minutes` (default 5) minutes before it starts:
+
+- as a **popup** in the terminal UI (Enter closes it), optionally with a **sound** (a terminal bell);
+- and/or through [Apprise](https://appriseit.com/), which reaches Telegram, e-mail, Discord, Pushover, ntfy and about a hundred
+  other services. Install `apprise`, put your URLs in Settings > Apprise URLs (or let `apprise_command` use Apprise's own
+  configuration), switch on Notifications: Apprise, and try Settings > Send a test notification.
+
+Every notification has its own options on the Notifications tab: **once** (the first time the programme shows up in the
+guide) or **every time** it shows up, **this channel** or **all channels**, and the minutes before the start (empty =
+the default). New notifications take their defaults from Settings (Notify: repeat, Notify: channels, Notify minutes
+before). A "once" notification is done after it was announced (`R` arms it again). Programmes that have a notification
+show a coloured dot before the time (Settings > Notification colour). The list is kept in `~/.rxmltv/rxmltv.notifications`,
+what was announced in `~/.rxmltv/rxmltv.notified`.
+
+Apprise notifications also work when rxmltv runs as a service, with nobody logged in (below). If the terminal UI and
+the service both run, the first one that notices a programme announces it; the UI still shows its popup.
+
+#### Running as a service
+
+`rxmltv --service` runs without the terminal UI until it is stopped. It updates the guide at the times in
+`update_times` (default `04:00`, local time; an update missed while the computer was off is made up when the service
+starts), shares it over HTTP if `service_serve = true`, and sends the Apprise notifications. It stays in the foreground:
+systemd, launchd, rc.d or Windows start and watch it.
+
+Step-by-step instructions, example service files and a settings example are in **[docs/SERVICE.md](docs/SERVICE.md)** and
+[`packaging/service/`](packaging/service/): Linux (systemd, as a system service with its own user or as a service of
+your own user with no root), macOS (launchd agent and daemon), FreeBSD (rc.d, and cron without root), Windows (Task
+Scheduler without administrator, or a real service with NSSM) and OpenRC. For example, a service of your own user on Linux:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp packaging/service/systemd/rxmltv-user.service ~/.config/systemd/user/rxmltv.service
+systemctl --user enable --now rxmltv
+sudo loginctl enable-linger "$USER"      # keep it running after you log out
+```
 
 #### Language
 
@@ -270,7 +313,7 @@ If either fails, the guide is still written and the exit code is 3.
 
 The settings file is plain text, one `key = value` per line: `days`, `output`, `cache_dir`, `concurrency`,
 `groups`, repeated `channel`, the yes/no options `clean_cache`, `strip_hd_tv`, `keep_title_numbers`,
-`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, `english_genres`, `slovak_genres`, `tui_serve`, `serve_port`, `serve_bind`, `language` (`en`, `cs` or `sk`), the display options `show_country`, `show_quality`,
+`keep_empty_channels`, `no_images`, `retry_missing`, `refresh_channels`, `compress_cache`, `english_genres`, `slovak_genres`, `tui_serve`, `serve_port`, `serve_bind`, `update_times`, `service_serve`, `notify_popup`, `notify_sound`, `notify_apprise`, `apprise_command`, `apprise_urls`, `notify_minutes`, `notify_repeat`, `notify_scope`, `notify_color`, `language` (`en`, `cs` or `sk`), the display options `show_country`, `show_quality`,
 `show_new`, `show_rerun`, `primetime` (`HH:MM`), `highlight_primetime`, `guide_layout` (`list` or `grid`), `favorite_color`, repeated `genre_color = keyword = colour`, and `post_command` and the
 `upload_*` settings (`upload_after_update`, `upload_protocol`, `upload_host`, `upload_port`, `upload_user`,
 `upload_password`, `upload_folder`, `upload_name`, `upload_key`, `upload_key_passphrase`, `upload_insecure`).

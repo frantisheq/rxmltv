@@ -1,0 +1,34 @@
+# Example settings for running rxmltv as a service (rxmltv --service).
+# Put it in the service user's ~/.rxmltv/rxmltv.conf (the default place), or give another file with --config.
+# One "key = value" per line. Everything has a default; this lists what a service usually sets.
+
+# What to download
+days = 7
+groups = cz, sk
+strip_hd_tv = true
+
+# Where the guide is written. Use an absolute path in a service (it has no useful current folder).
+output = /var/lib/rxmltv/epg.xml.gz
+
+# Keep the cache small
+clean_cache = true
+compress_cache = true
+
+# Update every day at these times (local time of the machine). A missed update is made up when the service starts.
+update_times = 04:30
+
+# Share the guide over HTTP: http://<this machine>:8080/epg.xml.gz (no password, no TLS: keep it on a trusted network)
+service_serve = true
+serve_port = 8080
+serve_bind = 0.0.0.0
+
+# Notifications through Apprise (https://appriseit.com/). Needs the apprise program.
+# The notification list is made in the terminal UI (rxmltv --tui, key b on a programme).
+notify_apprise = true
+apprise_command = apprise
+apprise_urls = tgram://BOT_TOKEN/CHAT_ID
+notify_minutes = 5
+
+# After each update: upload with curl, or run a command ({file} is the output file)
+# upload_after_update = true
+# post_command = cp {file} /srv/www/epg.xml.gz

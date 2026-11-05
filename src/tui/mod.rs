@@ -6,13 +6,16 @@ mod files;
 mod genres;
 mod guide_tab;
 mod input;
+mod notifications_tab;
 mod picker;
 mod settings_tab;
 mod share_tab;
 mod update_tab;
 mod upload_tab;
 
-use std::io::{self, IsTerminal};
+use std::collections::{HashSet, VecDeque};
+use std::io::{self, IsTerminal, Write};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -29,6 +32,7 @@ use crate::store::Favorites;
 use crate::{config, progress, t, Options};
 use favorites_tab::FavoritesTab;
 use guide_tab::GuideTab;
+use notifications_tab::{NotificationsTab, NotifyState};
 use settings_tab::SettingsTab;
 use share_tab::ShareTab;
 use update_tab::UpdateTab;
@@ -42,6 +46,7 @@ pub enum Tab {
     Update,
     Upload,
     Share,
+    Notifications,
 }
 
 impl Tab {
@@ -53,6 +58,7 @@ impl Tab {
             Tab::Update => 3,
             Tab::Upload => 4,
             Tab::Share => 5,
+            Tab::Notifications => 6,
         }
     }
 }
@@ -70,6 +76,14 @@ pub enum Action {
     ToggleLayout,
     /// Start or stop sharing the output file over HTTP.
     ToggleShare,
+    /// Add or remove a notification for this programme (on this channel).
+    ToggleNotification {
+        title: String,
+        channel_id: String,
+        channel_name: String,
+    },
+    /// Send a test notification the way the settings say.
+    TestNotification,
     ReloadGuide,
     /// Add the show to the favorites, or remove it when it is one already.
     ToggleFavorite(String),
@@ -186,6 +200,16 @@ struct App {
     update: UpdateTab,
     upload: UploadTab,
     share: ShareTab,
+    notifications_tab: NotificationsTab,
+    notify: NotifyState,
+    /// Notifications waiting for the user to close them.
+    popups: VecDeque<(String, String)>,
+    /// Airings already shown as a popup in this session.
+    popped: HashSet<String>,
+    last_notify_check: Instant,
+    /// Results of sending through Apprise: (claim key, result). An empty key is the test notification.
+    apprise_tx: Sender<(String, Result<(), String>)>,
+    apprise_rx: Receiver<(String, Result<(), String>)>,
     help: bool,
     quit: bool,
     quit_warned: bool,
@@ -227,6 +251,7 @@ impl App {
         let mut guide = GuideTab::new(PathBuf::from(&opts.output), config_path.with_extension("order"));
         guide.set_grid(opts.ui.grid_layout);
         let favorites = Favorites::load(config_path.with_extension("favorites"));
+        let (apprise_tx, apprise_rx) = mpsc::channel();
         App {
             opts,
             config_path,
@@ -239,6 +264,13 @@ impl App {
             update: UpdateTab::new(),
             upload: UploadTab::new(),
             share: ShareTab::new(),
+            notifications_tab: NotificationsTab::new(),
+            notify: NotifyState::new(),
+            popups: VecDeque::new(),
+            popped: HashSet::new(),
+            last_notify_check: Instant::now(),
+            apprise_tx,
+            apprise_rx,
             help: false,
             quit: false,
             quit_warned: false,
@@ -266,6 +298,8 @@ impl App {
             self.upload.poll();
             self.share.sync(&self.opts, &self.handle);
             self.share.poll();
+            self.check_notifications();
+            self.poll_apprise();
             self.settings.tick();
 
             terminal.draw(|f| self.draw(f))?;
@@ -279,6 +313,67 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Starts Apprise in the background; the result comes back through `apprise_rx`.
+    fn send_apprise(&self, key: String, title: String, body: String) {
+        let handle = self.handle.clone();
+        let tx = self.apprise_tx.clone();
+        let command = self.opts.apprise_command.clone();
+        let urls = self.opts.apprise_urls.clone();
+        std::thread::spawn(move || {
+            let result = handle.block_on(crate::notify::apprise(&command, &urls, &title, &body));
+            let _ = tx.send((key, result));
+        });
+    }
+
+    fn poll_apprise(&mut self) {
+        while let Ok((key, result)) = self.apprise_rx.try_recv() {
+            match result {
+                Ok(()) if key.is_empty() => self.set_status(t!("The test notification was sent.")),
+                Ok(()) => {}
+                Err(e) => {
+                    self.notify.fired.unclaim(&key); // the next check tries again
+                    self.set_status(t!("Apprise notification failed: {error}", error = e));
+                }
+            }
+        }
+    }
+
+    /// Every few seconds: popups, sound and Apprise for the programmes that are due.
+    fn check_notifications(&mut self) {
+        if self.last_notify_check.elapsed() < Duration::from_secs(10) || self.notify.rules.is_empty() {
+            return;
+        }
+        self.last_notify_check = Instant::now();
+        let Some(guide) = self.guide.guide() else { return };
+
+        self.notify.fired.reload();
+        let now = chrono::Utc::now().timestamp();
+        let due = crate::notify::due(&self.notify.rules, &self.notify.fired, guide, now, self.opts.notify_minutes);
+        if self.popped.len() > 500 {
+            self.popped.clear();
+        }
+
+        for d in due {
+            let key = d.key();
+            let (title, body) = d.message();
+
+            // the popup and the sound are for whoever sits at the terminal, even when the service announced it
+            if self.popped.insert(key.clone()) {
+                if self.opts.notify_popup {
+                    self.popups.push_back((title.clone(), body.clone()));
+                }
+                if self.opts.notify_sound {
+                    bell();
+                }
+            }
+
+            let delivers = self.opts.notify_popup || self.opts.notify_sound || self.opts.notify_apprise;
+            if !d.claimed && delivers && matches!(self.notify.fired.claim(&d), Ok(true)) && self.opts.notify_apprise {
+                self.send_apprise(key, title, body);
+            }
+        }
     }
 
     fn set_status(&mut self, text: impl Into<String>) {
@@ -306,6 +401,7 @@ impl App {
             Tab::Guide => self.guide.captures_text(),
             Tab::Favorites => self.favorites_tab.captures_text(),
             Tab::Settings => self.settings.captures_text(),
+            Tab::Notifications => self.notifications_tab.captures_text(),
             Tab::Update | Tab::Upload | Tab::Share => false,
         }
     }
@@ -313,6 +409,14 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit_now();
+            return;
+        }
+
+        if !self.popups.is_empty() {
+            // a notification is showing: Enter, Space or Esc closes it, other keys are ignored
+            if matches!(key.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char(' ')) {
+                self.popups.pop_front();
+            }
             return;
         }
 
@@ -357,6 +461,10 @@ impl App {
                     self.goto(Tab::Share);
                     return;
                 }
+                KeyCode::Char('7') | KeyCode::F(7) => {
+                    self.goto(Tab::Notifications);
+                    return;
+                }
                 _ => {}
             }
         }
@@ -368,6 +476,7 @@ impl App {
             Tab::Update => self.update.on_key(key),
             Tab::Upload => self.upload.on_key(key),
             Tab::Share => self.share.on_key(key),
+            Tab::Notifications => self.notifications_tab.on_key(key, &mut self.notify, &self.opts),
         };
         self.apply(action);
     }
@@ -391,6 +500,31 @@ impl App {
                 self.settings.mark_dirty();
                 let name = if self.opts.ui.grid_layout { t!("grid") } else { t!("list") };
                 self.set_status(t!("Guide layout: {name} (s on the Settings tab saves it).", name = name));
+            }
+            Action::ToggleNotification { title, channel_id, channel_name } => {
+                let result = self.notify.rules.toggle(
+                    &title,
+                    &channel_id,
+                    &channel_name,
+                    self.opts.notify_repeat,
+                    self.opts.notify_scope,
+                );
+                let text = match result {
+                    Ok(true) => t!("Notification on for \"{title}\".", title = title),
+                    Ok(false) => t!("Notification off for \"{title}\".", title = title),
+                    Err(e) => e,
+                };
+                self.set_status(text);
+            }
+            Action::TestNotification => {
+                let body = t!("This is a test notification.").to_string();
+                self.popups.push_back(("rxmltv".to_string(), body.clone()));
+                if self.opts.notify_sound {
+                    bell();
+                }
+                if self.opts.notify_apprise {
+                    self.send_apprise(String::new(), "rxmltv".to_string(), body);
+                }
             }
             Action::ToggleShare => {
                 self.opts.tui_serve = !self.opts.tui_serve;
@@ -486,6 +620,7 @@ impl App {
             format!("4 {}", t!("Update")),
             format!("5 {}", t!("Upload")),
             format!("6 {}", t!("Share")),
+            format!("7 {}", t!("Notifications")),
         ];
         f.render_widget(
             Paragraph::new(Span::styled(" rxmltv ", Style::new().add_modifier(Modifier::BOLD))),
@@ -500,7 +635,7 @@ impl App {
         );
 
         match self.tab {
-            Tab::Guide => self.guide.draw(f, body, &self.favorites, &self.opts.ui),
+            Tab::Guide => self.guide.draw(f, body, &self.favorites, &self.notify.rules, &self.opts.ui),
             Tab::Favorites => {
                 self.favorites_tab.draw(f, body, &self.favorites, self.guide.guide(), &self.opts.ui)
             }
@@ -511,9 +646,16 @@ impl App {
             Tab::Update => self.update.draw(f, body, &self.opts),
             Tab::Upload => self.upload.draw(f, body, &self.opts),
             Tab::Share => self.share.draw(f, body, &self.opts),
+            Tab::Notifications => {
+                self.notifications_tab.draw(f, body, &self.notify, self.guide.guide(), &self.opts)
+            }
         }
 
         self.draw_footer(f, footer);
+
+        if let Some((title, body)) = self.popups.front() {
+            draw_popup(f, area, title, body, self.popups.len());
+        }
 
         if self.help {
             draw_help(f, area);
@@ -535,12 +677,42 @@ impl App {
                     Tab::Update => UpdateTab::hints(),
                     Tab::Upload => UploadTab::hints(),
                     Tab::Share => ShareTab::hints(),
+                    Tab::Notifications => self.notifications_tab.hints(),
                 };
                 Line::from(Span::styled(hints, Style::new().fg(Color::DarkGray)))
             }
         };
         f.render_widget(Paragraph::new(line), area);
     }
+}
+
+/// A terminal bell.
+fn bell() {
+    let _ = io::stdout().write_all(b"\x07");
+    let _ = io::stdout().flush();
+}
+
+/// A notification over everything else; `waiting` counts the ones queued, this one included.
+fn draw_popup(f: &mut Frame, area: Rect, title: &str, body: &str, waiting: usize) {
+    let mut lines = vec![
+        Line::styled(title.to_string(), Style::new().add_modifier(Modifier::BOLD).fg(Color::Yellow)),
+        Line::raw(""),
+        Line::raw(body.to_string()),
+        Line::raw(""),
+        Line::styled(t!("Press Enter to close"), Style::new().fg(Color::DarkGray)),
+    ];
+    if waiting > 1 {
+        lines.push(Line::styled(t!("{count} more waiting", count = waiting - 1), Style::new().fg(Color::DarkGray)));
+    }
+    let popup = centered(area, 64.min(area.width), lines.len() as u16 + 2);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title(format!(" {} ", t!("Notification"))).border_style(Style::new().fg(Color::Yellow))),
+        popup,
+    );
 }
 
 fn draw_help(f: &mut Frame, area: Rect) {
@@ -554,7 +726,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
 
     let lines = vec![
         heading(t!("Everywhere")),
-        key("1-6 / F1-F6", t!("Guide, Favorites, Settings, Update, Upload, Share")),
+        key("1-7 / F1-F7", t!("Guide, Favorites, Settings, Update, Upload, Share, Notifications")),
         key("?", t!("this help")),
         key("q", t!("quit (Ctrl+C quits at once)")),
         Line::raw(""),
@@ -570,6 +742,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
         key("f", t!("filter the channel list by name")),
         key("r", t!("reload the guide file")),
         key("*", t!("add / remove the show as a favorite")),
+        key("b", t!("add / remove a notification for the show")),
         key("K J / Shift+Up Down", t!("move the channel up / down (channels pane)")),
         Line::raw(""),
         heading(t!("Favorites")),
@@ -591,6 +764,10 @@ fn draw_help(f: &mut Frame, area: Rect) {
         Line::raw(""),
         heading(t!("Share")),
         key("s", t!("start / stop sharing over HTTP")),
+        Line::raw(""),
+        heading(t!("Notifications")),
+        key("d r c m R", t!("delete, once/every time, this channel/all, minutes, re-arm")),
+        key("t", t!("send a test notification")),
         Line::raw(""),
         Line::styled(t!("Esc or ? closes this help"), Style::new().fg(Color::DarkGray)),
     ];

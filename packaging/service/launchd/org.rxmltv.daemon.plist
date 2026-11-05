@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  rxmltv as a launchd daemon: starts at boot, before anybody logs in. It still runs as an ordinary
+  (non-root) user, named in UserName. Needs root only to install it.
+
+    sudo cp org.rxmltv.daemon.plist /Library/LaunchDaemons/
+    # edit the paths and YOURNAME below
+    sudo chown root:wheel /Library/LaunchDaemons/org.rxmltv.daemon.plist
+    sudo chmod 644 /Library/LaunchDaemons/org.rxmltv.daemon.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/org.rxmltv.daemon.plist
+    sudo launchctl print system/org.rxmltv.daemon
+    sudo launchctl bootout system/org.rxmltv.daemon
+    tail -f /Users/YOURNAME/Library/Logs/rxmltv.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.rxmltv.daemon</string>
+    <key>UserName</key>
+    <string>YOURNAME</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/rxmltv</string>
+        <string>--service</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/YOURNAME</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/YOURNAME/Library/Logs/rxmltv.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOURNAME/Library/Logs/rxmltv.log</string>
+</dict>
+</plist>
