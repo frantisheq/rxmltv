@@ -31,7 +31,7 @@ use tokio::runtime::Handle;
 use crate::store::Favorites;
 use crate::{config, progress, t, Options};
 use favorites_tab::FavoritesTab;
-use guide_tab::GuideTab;
+use guide_tab::{GuideTab, NotifyTarget};
 use notifications_tab::{NotificationsTab, NotifyState};
 use settings_tab::SettingsTab;
 use share_tab::ShareTab;
@@ -76,11 +76,16 @@ pub enum Action {
     ToggleLayout,
     /// Start or stop sharing the output file over HTTP.
     ToggleShare,
-    /// Add or remove a notification for this programme (on this channel).
-    ToggleNotification {
+    /// `b` on a programme: remove its notification, or open the dialog to set one.
+    Notification(NotifyTarget),
+    /// Set a notification (the dialog's answer).
+    AddNotification {
         title: String,
         channel_id: String,
         channel_name: String,
+        repeat: crate::notify::Repeat,
+        scope: crate::notify::Scope,
+        from: i64,
     },
     /// Send a test notification the way the settings say.
     TestNotification,
@@ -476,7 +481,9 @@ impl App {
             Tab::Update => self.update.on_key(key),
             Tab::Upload => self.upload.on_key(key),
             Tab::Share => self.share.on_key(key),
-            Tab::Notifications => self.notifications_tab.on_key(key, &mut self.notify, &self.opts),
+            Tab::Notifications => {
+                self.notifications_tab.on_key(key, &mut self.notify, self.guide.guide())
+            }
         };
         self.apply(action);
     }
@@ -501,18 +508,36 @@ impl App {
                 let name = if self.opts.ui.grid_layout { t!("grid") } else { t!("list") };
                 self.set_status(t!("Guide layout: {name} (s on the Settings tab saves it).", name = name));
             }
-            Action::ToggleNotification { title, channel_id, channel_name } => {
-                let result = self.notify.rules.toggle(
-                    &title,
-                    &channel_id,
-                    &channel_name,
-                    self.opts.notify_repeat,
-                    self.opts.notify_scope,
-                );
-                let text = match result {
-                    Ok(true) => t!("Notification on for \"{title}\".", title = title),
-                    Ok(false) => t!("Notification off for \"{title}\".", title = title),
-                    Err(e) => e,
+            Action::Notification(target) => {
+                let key = crate::store::title_key(&target.title);
+                let existing = self.notify.rules.covering(&key, &target.channel_id, target.start);
+                if existing.is_empty() {
+                    // nothing yet: ask once or every time, which channels, and what to do if it is running
+                    self.guide.open_notify(target, self.opts.notify_repeat, self.opts.notify_scope);
+                } else {
+                    let mut text = t!("Notification off for \"{title}\".", title = target.title);
+                    for id in existing {
+                        if let Err(e) = self.notify.rules.remove(id) {
+                            text = e;
+                        }
+                        let _ = self.notify.fired.clear_rule(id);
+                    }
+                    self.set_status(text);
+                }
+            }
+            Action::AddNotification { title, channel_id, channel_name, repeat, scope, from } => {
+                let result =
+                    self.notify.rules.add(&title, repeat, scope, &channel_id, &channel_name, None, from);
+                let text = match (result, repeat) {
+                    (Err(e), _) => e,
+                    (Ok(_), crate::notify::Repeat::Once) => t!(
+                        "Notification set for \"{title}\" on {when}.",
+                        title = title,
+                        when = notifications_tab::when_of(from)
+                    ),
+                    (Ok(_), crate::notify::Repeat::Always) => {
+                        t!("Notification set for \"{title}\" and the upcoming airings.", title = title)
+                    }
                 };
                 self.set_status(text);
             }
@@ -635,7 +660,13 @@ impl App {
         );
 
         match self.tab {
-            Tab::Guide => self.guide.draw(f, body, &self.favorites, &self.notify.rules, &self.opts.ui),
+            Tab::Guide => {
+                let marks = match self.guide.guide() {
+                    Some(g) => crate::notify::marked_airings(&self.notify.rules, g),
+                    None => std::collections::HashSet::new(),
+                };
+                self.guide.draw(f, body, &self.favorites, &marks, &self.opts.ui)
+            }
             Tab::Favorites => {
                 self.favorites_tab.draw(f, body, &self.favorites, self.guide.guide(), &self.opts.ui)
             }

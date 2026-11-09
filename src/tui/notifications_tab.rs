@@ -66,7 +66,7 @@ impl NotificationsTab {
         self.state.selected().and_then(|i| state.rules.rules().get(i))
     }
 
-    pub fn on_key(&mut self, key: KeyEvent, state: &mut NotifyState, o: &Options) -> Action {
+    pub fn on_key(&mut self, key: KeyEvent, state: &mut NotifyState, guide: Option<&Guide>) -> Action {
         self.notice = None;
         match std::mem::replace(&mut self.mode, Mode::Browse) {
             Mode::Add(mut input) => {
@@ -75,9 +75,10 @@ impl NotificationsTab {
                     KeyCode::Enter => {
                         let title = input.value();
                         if !title.trim().is_empty() {
-                            // typed by hand there is no channel, so the rule covers all of them
+                            // typed by hand there is no airing: every time from now on, on all channels
+                            let now = Utc::now().timestamp();
                             if let Err(e) =
-                                state.rules.add(&title, o.notify_repeat, Scope::AllChannels, "", "", None)
+                                state.rules.add(&title, Repeat::Always, Scope::AllChannels, "", "", None, now)
                             {
                                 return Action::Status(e);
                             }
@@ -123,11 +124,11 @@ impl NotificationsTab {
                 }
                 Action::None
             }
-            Mode::Browse => self.browse_key(key, state),
+            Mode::Browse => self.browse_key(key, state, guide),
         }
     }
 
-    fn browse_key(&mut self, key: KeyEvent, state: &mut NotifyState) -> Action {
+    fn browse_key(&mut self, key: KeyEvent, state: &mut NotifyState, guide: Option<&Guide>) -> Action {
         let len = state.rules.rules().len();
         let current = self.state.selected().unwrap_or(0);
         let selected = self.selected_rule(state).map(|r| (r.id, r.title.clone(), r.repeat, r.scope));
@@ -156,13 +157,44 @@ impl NotificationsTab {
             }
             KeyCode::Char('r') => {
                 if let Some((id, _, repeat, _)) = selected {
-                    if let Err(e) = state.rules.update(id, |r| r.repeat = repeat.flip()) {
+                    let result = match repeat {
+                        // for the airing it was set on, and the ones after it
+                        Repeat::Once => state.rules.update(id, |r| r.repeat = Repeat::Always),
+                        // a single notification needs an airing: the next one the rule covers
+                        Repeat::Always => {
+                            let now = Utc::now().timestamp();
+                            let next = guide.and_then(|g| {
+                                let rule = state.rules.rules().iter().find(|r| r.id == id)?;
+                                next_airing(rule, g, now)
+                            });
+                            match next {
+                                Some((channel_id, channel_name, start)) => state.rules.update(id, |r| {
+                                    r.repeat = Repeat::Once;
+                                    r.channel_id = channel_id;
+                                    r.channel_name = channel_name;
+                                    r.from = start;
+                                }),
+                                None => {
+                                    return Action::Status(
+                                        t!("No upcoming airing in the guide to make this a single notification.")
+                                            .to_string(),
+                                    )
+                                }
+                            }
+                        }
+                    };
+                    if let Err(e) = result {
                         return Action::Status(e);
                     }
                 }
             }
             KeyCode::Char('c') => {
-                if let Some((id, _, _, scope)) = selected {
+                if let Some((id, _, repeat, scope)) = selected {
+                    if repeat == Repeat::Once {
+                        return Action::Status(
+                            t!("A single notification is for one airing; it has no channel choice.").to_string(),
+                        );
+                    }
                     if let Err(e) = state.rules.update(id, |r| r.scope = scope.flip()) {
                         return Action::Status(e);
                     }
@@ -205,9 +237,16 @@ impl NotificationsTab {
             .rules()
             .iter()
             .map(|rule| {
-                let scope = match rule.scope {
-                    Scope::ThisChannel if !rule.channel_name.is_empty() => rule.channel_name.clone(),
-                    other => other.label().to_string(),
+                // a single notification is for one airing on one channel; "every time" can cover them all
+                let scope = match (rule.repeat, rule.scope) {
+                    (Repeat::Once, _) | (_, Scope::ThisChannel) if !rule.channel_name.is_empty() => {
+                        rule.channel_name.clone()
+                    }
+                    (_, other) => other.label().to_string(),
+                };
+                let mode = match rule.repeat {
+                    Repeat::Once => t!("once, {when}", when = when_of(rule.from)),
+                    Repeat::Always => t!("every time from {when}", when = when_of(rule.from)),
                 };
                 let minutes = match rule.minutes {
                     Some(m) => t!("{minutes} min", minutes = m),
@@ -217,7 +256,7 @@ impl NotificationsTab {
                     "{}  [{}]  [{}]  {}  {}",
                     rule.title,
                     scope,
-                    rule.repeat.label(),
+                    mode,
                     minutes,
                     status(rule, &state.fired, guide, now)
                 );
@@ -271,26 +310,45 @@ impl NotificationsTab {
     }
 }
 
-/// "waiting · next Thu 29.10. 20:15 ČT1", "done" and so on.
+/// "Thu 29.10. 20:15" for a timestamp (Prague time, like the guide).
+pub fn when_of(ts: i64) -> String {
+    match chrono::DateTime::from_timestamp(ts, 0) {
+        Some(d) => crate::i18n::when_short(&d.with_timezone(&chrono_tz::Europe::Prague)),
+        None => String::new(),
+    }
+}
+
+/// The first airing the rule is for that has not started yet: (channel id, channel name, start).
+fn next_airing(rule: &Rule, guide: &Guide, now: i64) -> Option<(String, String, i64)> {
+    guide.airings(&rule.key).iter().find_map(|&(c, p)| {
+        let channel = &guide.channels[c];
+        let start = channel.programmes[p].start.timestamp();
+        (rule.covers(&channel.id, start) && start >= now - 60).then(|| (channel.id.clone(), channel.name.clone(), start))
+    })
+}
+
+/// "waiting, next: Thu 29.10. 20:15 ČT1", "done" and so on.
 fn status(rule: &Rule, fired: &Fired, guide: Option<&Guide>, now: i64) -> String {
     let announced = fired.for_rule(rule.id);
-    if rule.repeat == Repeat::Once && !announced.is_empty() {
-        let past = announced.iter().all(|(_, start)| *start < now);
-        return if past { t!("done").to_string() } else { t!("announced").to_string() };
-    }
 
-    let Some(guide) = guide else { return String::new() };
-    let next = guide.airings(&rule.key).iter().find_map(|&(c, p)| {
-        let channel = &guide.channels[c];
-        if rule.scope == Scope::ThisChannel && channel.id != rule.channel_id {
-            return None;
+    match rule.repeat {
+        Repeat::Once => {
+            if !announced.is_empty() {
+                return if rule.from < now { t!("done").to_string() } else { t!("announced").to_string() };
+            }
+            if rule.from < now - 60 {
+                return t!("missed").to_string();
+            }
+            t!("waiting, next: {when}", when = format!("{} {}", when_of(rule.from), rule.channel_name))
         }
-        let programme = &channel.programmes[p];
-        (programme.start.timestamp() >= now - 60)
-            .then(|| format!("{} {}", crate::i18n::when_short(&programme.start), channel.name))
-    });
-    match next {
-        Some(when) => t!("waiting, next: {when}", when = when),
-        None => t!("not in the guide").to_string(),
+        Repeat::Always => {
+            let Some(guide) = guide else { return String::new() };
+            match next_airing(rule, guide, now) {
+                Some((_, channel_name, start)) => {
+                    t!("waiting, next: {when}", when = format!("{} {}", when_of(start), channel_name))
+                }
+                None => t!("not in the guide").to_string(),
+            }
+        }
     }
 }

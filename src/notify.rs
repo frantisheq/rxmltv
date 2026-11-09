@@ -1,7 +1,9 @@
 //! Notifications about programmes: the rules ("tell me when X is on"), what has already been announced, the
 //! check that decides what is due, and sending through Apprise (https://appriseit.com/).
 //!
-//! The same code runs in the terminal UI (popup, sound, Apprise) and in the service mode (Apprise only), so a
+//! A "once" rule is for one airing (a channel and a start time); an "every time" rule is for the airings that start
+//! at or after its `from` time (on one channel or on all). The same code runs in the terminal UI (popup, sound,
+//! Apprise) and in the service mode (Apprise only), so a
 //! notification is *claimed* in the "notified" file before it is sent: whoever claims it sends it, the other
 //! one skips it. A rule is kept in `rxmltv.notifications`, what was announced in `rxmltv.notified`.
 #![cfg_attr(not(feature = "tui"), allow(dead_code))]
@@ -109,6 +111,9 @@ pub struct Rule {
     pub channel_name: String,
     /// Minutes before the start; None: the default from the settings.
     pub minutes: Option<u32>,
+    /// Once: the start time of the airing the rule is for (on `channel_id`). Every time: the rule is for the
+    /// airings that start at or after this time (a timestamp).
+    pub from: i64,
 }
 
 fn clean(text: &str) -> String {
@@ -116,33 +121,43 @@ fn clean(text: &str) -> String {
 }
 
 impl Rule {
+    /// Is the airing on this channel that starts at `start` one this rule is for?
+    pub fn covers(&self, channel_id: &str, start: i64) -> bool {
+        match self.repeat {
+            Repeat::Once => channel_id == self.channel_id && start == self.from,
+            Repeat::Always => start >= self.from && (self.scope == Scope::AllChannels || channel_id == self.channel_id),
+        }
+    }
+
     fn to_line(&self) -> String {
         format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.id,
             self.repeat.code(),
             self.scope.code(),
             self.minutes.map(|m| m.to_string()).unwrap_or_default(),
             clean(&self.channel_id),
             clean(&self.channel_name),
+            self.from,
             clean(&self.title)
         )
     }
 
     fn from_line(line: &str) -> Option<Rule> {
-        let mut parts = line.splitn(7, '\t');
+        let mut parts = line.splitn(8, '\t');
         let id = parts.next()?.trim().parse().ok()?;
         let repeat = Repeat::parse(parts.next()?)?;
         let scope = Scope::parse(parts.next()?)?;
         let minutes = parts.next()?.trim().parse::<u32>().ok();
         let channel_id = parts.next()?.trim().to_string();
         let channel_name = parts.next()?.trim().to_string();
+        let from = parts.next()?.trim().parse::<i64>().ok()?;
         let title = parts.next()?.trim().to_string();
         let key = title_key(&title);
         if key.is_empty() {
             return None;
         }
-        Some(Rule { id, title, key, repeat, scope, channel_id, channel_name, minutes })
+        Some(Rule { id, title, key, repeat, scope, channel_id, channel_name, minutes, from })
     }
 }
 
@@ -181,6 +196,7 @@ impl Rules {
         self.rules.iter().map(|r| r.id).max().unwrap_or(0) + 1
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add(
         &mut self,
         title: &str,
@@ -189,6 +205,7 @@ impl Rules {
         channel_id: &str,
         channel_name: &str,
         minutes: Option<u32>,
+        from: i64,
     ) -> Result<u64, String> {
         let title = clean(title);
         let key = title_key(&title);
@@ -205,37 +222,15 @@ impl Rules {
             channel_id: clean(channel_id),
             channel_name: clean(channel_name),
             minutes,
+            from,
         });
         self.save()?;
         Ok(id)
     }
 
-    /// The rule that covers this programme on this channel, if any.
-    pub fn find_for(&self, key: &str, channel_id: &str) -> Option<&Rule> {
-        self.rules
-            .iter()
-            .find(|r| r.key == key && (r.scope == Scope::AllChannels || r.channel_id == channel_id))
-    }
-
-    pub fn matches(&self, key: &str, channel_id: &str) -> bool {
-        self.find_for(key, channel_id).is_some()
-    }
-
-    /// Removes the rule that covers the programme, or adds one. Ok(true): it was added.
-    pub fn toggle(
-        &mut self,
-        title: &str,
-        channel_id: &str,
-        channel_name: &str,
-        repeat: Repeat,
-        scope: Scope,
-    ) -> Result<bool, String> {
-        let key = title_key(title);
-        if let Some(id) = self.find_for(&key, channel_id).map(|r| r.id) {
-            self.remove(id)?;
-            return Ok(false);
-        }
-        self.add(title, repeat, scope, channel_id, channel_name, None).map(|_| true)
+    /// The rules that are for this airing (a programme with this title, on this channel, starting at `start`).
+    pub fn covering(&self, key: &str, channel_id: &str, start: i64) -> Vec<u64> {
+        self.rules.iter().filter(|r| r.key == key && r.covers(channel_id, start)).map(|r| r.id).collect()
     }
 
     pub fn remove(&mut self, id: u64) -> Result<(), String> {
@@ -363,28 +358,19 @@ impl Due {
     }
 }
 
-/// What is due at `now`: programmes of a rule that start within their lead time (or just started). A "once" rule
-/// yields its first airing only, and, once that was announced, only that one (so a popup can still show it).
+/// What is due at `now`: airings a rule is for that start within the rule's lead time (or have just started).
 pub fn due(rules: &Rules, fired: &Fired, guide: &Guide, now: i64, default_minutes: u32) -> Vec<Due> {
     let mut out: Vec<Due> = Vec::new();
 
     for rule in rules.rules() {
         let lead = i64::from(rule.minutes.unwrap_or(default_minutes)) * 60;
-        let announced_once = rule.repeat == Repeat::Once && !fired.for_rule(rule.id).is_empty();
 
         for &(c, p) in guide.airings(&rule.key) {
             let channel = &guide.channels[c];
-            if rule.scope == Scope::ThisChannel && channel.id != rule.channel_id {
-                continue;
-            }
             let programme = &channel.programmes[p];
             let start = programme.start.timestamp();
-            if now < start - lead || now >= start + GRACE_SECONDS {
+            if !rule.covers(&channel.id, start) || now < start - lead || now >= start + GRACE_SECONDS {
                 continue;
-            }
-            let claimed = fired.contains(rule.id, &channel.id, start);
-            if announced_once && !claimed {
-                continue; // the one airing of this rule was announced already
             }
             out.push(Due {
                 rule_id: rule.id,
@@ -394,16 +380,29 @@ pub fn due(rules: &Rules, fired: &Fired, guide: &Guide, now: i64, default_minute
                 start,
                 time: programme.start.format("%H:%M").to_string(),
                 minutes_left: if start > now { (start - now + 59) / 60 } else { 0 },
-                claimed,
+                claimed: fired.contains(rule.id, &channel.id, start),
             });
-            if rule.repeat == Repeat::Once {
-                break;
-            }
         }
     }
 
     out.sort_by_key(|d| d.start);
     out
+}
+
+/// The airings the notification dot is shown on, as (position of the channel in the guide, start time): the one
+/// airing of a "once" rule, and the airings from the start time of an "every time" rule on.
+pub fn marked_airings(rules: &Rules, guide: &Guide) -> HashSet<(usize, i64)> {
+    let mut marked: HashSet<(usize, i64)> = HashSet::new();
+    for rule in rules.rules() {
+        for &(c, p) in guide.airings(&rule.key) {
+            let channel = &guide.channels[c];
+            let start = channel.programmes[p].start.timestamp();
+            if rule.covers(&channel.id, start) {
+                marked.insert((c, start));
+            }
+        }
+    }
+    marked
 }
 
 // ---------- Apprise ----------
@@ -470,57 +469,108 @@ mod tests {
         crate::guide::parse(xml).unwrap()
     }
 
+    /// 20:00 +0100
     fn start() -> i64 {
-        // 20:00 +0100
         chrono::DateTime::parse_from_str("20261029200000 +0100", "%Y%m%d%H%M%S %z").unwrap().timestamp()
+    }
+
+    fn fresh(name: &str) -> (Rules, Fired, PathBuf, PathBuf) {
+        let rules_path = temp(&format!("{name}-rules"));
+        let fired_path = temp(&format!("{name}-fired"));
+        let _ = std::fs::remove_file(&rules_path);
+        let _ = std::fs::remove_file(&fired_path);
+        (Rules::load(rules_path.clone()), Fired::load(fired_path.clone()), rules_path, fired_path)
     }
 
     #[test]
     fn rules_are_saved_and_loaded() {
-        let path = temp("rules");
-        let _ = std::fs::remove_file(&path);
-        let mut rules = Rules::load(path.clone());
-        let a = rules.add("Večer s hvězdami", Repeat::Once, Scope::ThisChannel, "cz-ct1-2", "ČT1", None).unwrap();
-        let b = rules.add("Nautilus", Repeat::Always, Scope::AllChannels, "cz-nova-5", "Nova", Some(10)).unwrap();
+        let (mut rules, _fired, rules_path, fired_path) = fresh("saved");
+        let a = rules.add("Večer s hvězdami", Repeat::Once, Scope::ThisChannel, "cz-ct1-2", "ČT1", None, 1000).unwrap();
+        let b = rules.add("Nautilus", Repeat::Always, Scope::AllChannels, "cz-nova-5", "Nova", Some(10), 2000).unwrap();
         assert_ne!(a, b);
-        assert!(rules.add("   ", Repeat::Once, Scope::AllChannels, "", "", None).is_err());
+        assert!(rules.add("   ", Repeat::Once, Scope::AllChannels, "", "", None, 0).is_err());
 
-        let again = Rules::load(path.clone());
+        let again = Rules::load(rules_path.clone());
         assert_eq!(again.rules().len(), 2);
         assert_eq!(again.rules()[1].minutes, Some(10));
         assert_eq!(again.rules()[0].channel_name, "ČT1");
+        assert_eq!(again.rules()[0].from, 1000);
         assert_eq!(again.rules()[1].repeat, Repeat::Always);
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&rules_path);
+        let _ = std::fs::remove_file(&fired_path);
     }
 
     #[test]
-    fn rules_cover_a_channel_or_all() {
-        let path = temp("cover");
-        let _ = std::fs::remove_file(&path);
-        let mut rules = Rules::load(path.clone());
-        rules.add("Nautilus", Repeat::Once, Scope::ThisChannel, "cz-ct1-2", "ČT1", None).unwrap();
-        assert!(rules.matches("nautilus", "cz-ct1-2"));
-        assert!(!rules.matches("nautilus", "cz-nova-5"));
-        rules.add("Zprávy", Repeat::Once, Scope::AllChannels, "cz-ct1-2", "ČT1", None).unwrap();
-        assert!(rules.matches("zpravy", "anything"));
+    fn a_once_rule_is_for_one_airing() {
+        let (mut rules, _fired, rules_path, fired_path) = fresh("once-covers");
+        let s = start();
+        rules.add("Nautilus", Repeat::Once, Scope::AllChannels, "cz-ct1-2", "ČT1", None, s).unwrap();
+        let rule = &rules.rules()[0];
+        assert!(rule.covers("cz-ct1-2", s));
+        assert!(!rule.covers("cz-ct1-2", s + 7200)); // the later episode
+        assert!(!rule.covers("cz-ct1-2", s - 7200)); // an earlier one
+        assert!(!rule.covers("cz-nova-5", s)); // the same time on another channel
+        assert_eq!(rules.covering("nautilus", "cz-ct1-2", s), vec![rule.id]);
+        assert!(rules.covering("nautilus", "cz-ct1-2", s + 1).is_empty());
+        let _ = std::fs::remove_file(&rules_path);
+        let _ = std::fs::remove_file(&fired_path);
+    }
 
-        // toggling removes an existing rule and adds a missing one
-        assert_eq!(rules.toggle("Nautilus", "cz-ct1-2", "ČT1", Repeat::Once, Scope::ThisChannel).unwrap(), false);
-        assert!(!rules.matches("nautilus", "cz-ct1-2"));
-        assert_eq!(rules.toggle("Nautilus", "cz-ct1-2", "ČT1", Repeat::Always, Scope::AllChannels).unwrap(), true);
-        assert_eq!(rules.find_for("nautilus", "cz-nova-5").unwrap().repeat, Repeat::Always);
-        let _ = std::fs::remove_file(&path);
+    #[test]
+    fn an_every_time_rule_is_for_this_and_later_airings() {
+        let (mut rules, _fired, rules_path, fired_path) = fresh("always-covers");
+        let s = start();
+        rules.add("Nautilus", Repeat::Always, Scope::ThisChannel, "cz-ct1-2", "ČT1", None, s).unwrap();
+        let rule = &rules.rules()[0];
+        assert!(rule.covers("cz-ct1-2", s));
+        assert!(rule.covers("cz-ct1-2", s + 7200));
+        assert!(!rule.covers("cz-ct1-2", s - 1)); // before it was set
+        assert!(!rule.covers("cz-nova-5", s + 7200)); // this channel only
+
+        let id = rule.id;
+        rules.update(id, |r| r.scope = Scope::AllChannels).unwrap();
+        assert!(rules.rules()[0].covers("cz-nova-5", s + 7200));
+        let _ = std::fs::remove_file(&rules_path);
+        let _ = std::fs::remove_file(&fired_path);
+    }
+
+    #[test]
+    fn the_dot_is_on_exactly_the_airings_a_rule_is_for() {
+        let (mut rules, _fired, rules_path, fired_path) = fresh("dots");
+        let g = guide();
+        let s = start();
+        let late = s + 2 * 3600;
+        let (ct1, nova) = (0usize, 1usize); // channel positions in the guide
+
+        // once, for the 22:00 episode on CT1: only that one, not the 20:00 ones
+        let id = rules.add("Nautilus", Repeat::Once, Scope::AllChannels, "cz-ct1-2", "ČT1", None, late).unwrap();
+        let marks = marked_airings(&rules, &g);
+        assert_eq!(marks.len(), 1);
+        assert!(marks.contains(&(ct1, late)));
+
+        // every time from the first CT1 airing: all later ones on CT1 only (two airings), then on all channels
+        rules.update(id, |r| {
+            r.repeat = Repeat::Always;
+            r.scope = Scope::ThisChannel;
+            r.from = s;
+        })
+        .unwrap();
+        let marks = marked_airings(&rules, &g);
+        assert_eq!(marks, HashSet::from([(ct1, s), (ct1, late)]));
+        rules.update(id, |r| r.scope = Scope::AllChannels).unwrap();
+        assert_eq!(marked_airings(&rules, &g), HashSet::from([(ct1, s), (nova, s), (ct1, late)]));
+
+        // from the 22:00 one on: nothing earlier
+        rules.update(id, |r| r.from = late).unwrap();
+        assert_eq!(marked_airings(&rules, &g), HashSet::from([(ct1, late)]));
+        let _ = std::fs::remove_file(&rules_path);
+        let _ = std::fs::remove_file(&fired_path);
     }
 
     #[test]
     fn a_programme_is_due_in_its_window() {
-        let rules_path = temp("window-rules");
-        let fired_path = temp("window-fired");
-        let _ = std::fs::remove_file(&rules_path);
-        let _ = std::fs::remove_file(&fired_path);
-        let mut rules = Rules::load(rules_path.clone());
-        rules.add("Zprávy", Repeat::Once, Scope::AllChannels, "", "", None).unwrap();
-        let fired = Fired::load(fired_path.clone());
+        let (mut rules, fired, rules_path, fired_path) = fresh("window");
+        rules.add("Zprávy", Repeat::Always, Scope::AllChannels, "", "", None, 0).unwrap();
         let g = guide();
         let s = start();
 
@@ -542,48 +592,38 @@ mod tests {
     }
 
     #[test]
-    fn a_once_rule_announces_one_airing_only() {
-        let rules_path = temp("once-rules");
-        let fired_path = temp("once-fired");
-        let _ = std::fs::remove_file(&rules_path);
-        let _ = std::fs::remove_file(&fired_path);
-        let mut rules = Rules::load(rules_path.clone());
-        rules.add("Nautilus", Repeat::Once, Scope::AllChannels, "", "", None).unwrap();
-        let mut fired = Fired::load(fired_path.clone());
-        let g = guide();
+    fn a_once_rule_notifies_for_its_airing_only() {
+        let (mut rules, mut fired, rules_path, fired_path) = fresh("once-due");
         let s = start();
+        let late = s + 2 * 3600;
+        rules.add("Nautilus", Repeat::Once, Scope::AllChannels, "cz-ct1-2", "ČT1", None, late).unwrap();
+        let g = guide();
 
-        // 20:00 is on CT1 and on Nova: one is picked
-        let first = due(&rules, &fired, &g, s - 120, 5);
-        assert_eq!(first.len(), 1);
-        assert!(!first[0].claimed);
-        assert!(fired.claim(&first[0]).unwrap());
-        assert!(!fired.claim(&first[0]).unwrap()); // a second claim loses
+        // at 19:58 the 20:00 airings are due for nobody: the rule is for the 22:00 episode
+        assert!(due(&rules, &fired, &g, s - 120, 5).is_empty());
+        let evening = due(&rules, &fired, &g, late - 120, 5);
+        assert_eq!(evening.len(), 1);
+        assert_eq!(evening[0].start, late);
+        assert!(!evening[0].claimed);
+        assert!(fired.claim(&evening[0]).unwrap());
+        assert!(!fired.claim(&evening[0]).unwrap()); // a second claim loses
 
-        // announced: the same airing still shows (claimed), the 22:00 one does not
-        let again = due(&rules, &fired, &g, s - 120, 5);
-        assert_eq!(again.len(), 1);
-        assert!(again[0].claimed);
-        assert!(due(&rules, &fired, &g, s + 2 * 3600 - 120, 5).is_empty());
+        // announced: it still shows (claimed), for a popup
+        assert!(due(&rules, &fired, &g, late - 60, 5)[0].claimed);
 
         // re-arming forgets the announcement
         fired.clear_rule(rules.rules()[0].id).unwrap();
-        assert!(!due(&rules, &fired, &g, s + 2 * 3600 - 120, 5).is_empty());
+        assert!(!due(&rules, &fired, &g, late - 60, 5)[0].claimed);
         let _ = std::fs::remove_file(&rules_path);
         let _ = std::fs::remove_file(&fired_path);
     }
 
     #[test]
-    fn an_always_rule_announces_every_airing_once() {
-        let rules_path = temp("always-rules");
-        let fired_path = temp("always-fired");
-        let _ = std::fs::remove_file(&rules_path);
-        let _ = std::fs::remove_file(&fired_path);
-        let mut rules = Rules::load(rules_path.clone());
-        rules.add("Nautilus", Repeat::Always, Scope::ThisChannel, "cz-ct1-2", "ČT1", None).unwrap();
-        let mut fired = Fired::load(fired_path.clone());
-        let g = guide();
+    fn an_every_time_rule_notifies_for_each_airing_once() {
+        let (mut rules, mut fired, rules_path, fired_path) = fresh("always-due");
         let s = start();
+        rules.add("Nautilus", Repeat::Always, Scope::ThisChannel, "cz-ct1-2", "ČT1", None, s).unwrap();
+        let g = guide();
 
         let evening = due(&rules, &fired, &g, s - 120, 5);
         assert_eq!(evening.len(), 1); // CT1 only: the rule is for this channel

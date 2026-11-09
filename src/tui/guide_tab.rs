@@ -16,7 +16,8 @@ use super::{border_style, centered, fit, parse_color, selected_style, Action};
 use crate::groups::normalize;
 use crate::config::UiOptions;
 use crate::guide::{self, Guide, GuideChannel, GuideProgramme};
-use crate::notify::Rules;
+use std::collections::HashSet;
+use crate::notify::{Repeat, Scope};
 use crate::store::{self, title_key, Favorites};
 use crate::t;
 
@@ -34,10 +35,34 @@ struct Search {
     state: ListState,
 }
 
+/// The programme a notification is being set for.
+#[derive(Clone)]
+pub struct NotifyTarget {
+    pub title: String,
+    pub channel_id: String,
+    pub channel_name: String,
+    /// When the highlighted airing starts / ends (timestamps).
+    pub start: i64,
+    pub end: Option<i64>,
+    /// "Thu 29.10. 20:15"
+    pub when: String,
+    /// The start of the next airing of this title on this channel, if the guide has one.
+    pub next_start: Option<i64>,
+}
+
+/// The dialog that opens when `b` is pressed on a programme that has no notification yet.
+struct NotifyDialog {
+    target: NotifyTarget,
+    repeat: Repeat,
+    scope: Scope,
+    notice: Option<String>,
+}
+
 enum Mode {
     Normal,
     Filter(Input),
     Search(Search),
+    Notify(NotifyDialog),
 }
 
 pub struct GuideTab {
@@ -289,6 +314,7 @@ impl GuideTab {
             }
             Mode::Filter(_) => t!("type to filter the channels · Enter keep the filter · Esc clear it"),
             Mode::Search(_) => t!("type to search · ↑↓ choose · Enter go to the programme · Esc close"),
+            Mode::Notify(_) => t!("choose with the keys shown · Esc cancel"),
         }
     }
 
@@ -419,6 +445,7 @@ impl GuideTab {
             Mode::Normal => self.key_normal(key),
             Mode::Filter(input) => self.key_filter(key, input),
             Mode::Search(search) => self.key_search(key, search),
+            Mode::Notify(dialog) => self.key_notify(key, dialog),
         }
     }
 
@@ -470,12 +497,8 @@ impl GuideTab {
                 }
             }
             KeyCode::Char('b') | KeyCode::Char('!') => {
-                if let Some((channel, programme)) = self.selected_programme() {
-                    return Action::ToggleNotification {
-                        title: programme.title.clone(),
-                        channel_id: channel.id.clone(),
-                        channel_name: channel.name.clone(),
-                    };
+                if let Some(target) = self.notify_target() {
+                    return Action::Notification(target);
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
@@ -511,6 +534,74 @@ impl GuideTab {
             }
             _ => {}
         }
+        Action::None
+    }
+
+    /// The highlighted airing, as a notification would be set for it.
+    fn notify_target(&self) -> Option<NotifyTarget> {
+        let (channel, programme) = self.selected_programme()?;
+        let guide = self.guide.as_ref()?;
+        let channel_index = self.selected_channel_index()?;
+        let position = channel.programmes.iter().position(|x| std::ptr::eq(x, programme))?;
+        let start = programme.start.timestamp();
+
+        let key = title_key(&programme.title);
+        let next_start = guide
+            .airings(&key)
+            .iter()
+            .filter(|&&(c, _)| c == channel_index)
+            .map(|&(c, p)| guide.channels[c].programmes[p].start.timestamp())
+            .find(|&s| s > start);
+
+        Some(NotifyTarget {
+            title: programme.title.clone(),
+            channel_id: channel.id.clone(),
+            channel_name: channel.name.clone(),
+            start,
+            end: channel.end(position).map(|e| e.timestamp()),
+            when: crate::i18n::when_short(&programme.start),
+            next_start,
+        })
+    }
+
+    /// Opens the dialog for a programme that has no notification yet.
+    pub fn open_notify(&mut self, target: NotifyTarget, repeat: Repeat, scope: Scope) {
+        self.mode = Mode::Notify(NotifyDialog { target, repeat, scope, notice: None });
+    }
+
+    fn key_notify(&mut self, key: KeyEvent, mut dialog: NotifyDialog) -> Action {
+        let now = Utc::now().timestamp();
+        let running = dialog.target.start <= now; // running now, or already over
+
+        let add = |dialog: &NotifyDialog, repeat: Repeat, scope: Scope, from: i64| Action::AddNotification {
+            title: dialog.target.title.clone(),
+            channel_id: dialog.target.channel_id.clone(),
+            channel_name: dialog.target.channel_name.clone(),
+            repeat,
+            scope,
+            from,
+        };
+
+        match key.code {
+            KeyCode::Esc => return Action::None, // closed: nothing is set
+            KeyCode::Char('c') => dialog.scope = dialog.scope.flip(),
+            KeyCode::Char('r') | KeyCode::Left | KeyCode::Right | KeyCode::Tab if !running => {
+                dialog.repeat = dialog.repeat.flip();
+            }
+            KeyCode::Enter if !running => {
+                // this airing; with "every time" also the ones after it
+                return add(&dialog, dialog.repeat, dialog.scope, dialog.target.start);
+            }
+            KeyCode::Char('n') if running => match dialog.target.next_start {
+                Some(next) => return add(&dialog, Repeat::Once, Scope::ThisChannel, next),
+                None => {
+                    dialog.notice = Some(t!("There is no later airing of this programme in the guide yet.").to_string());
+                }
+            },
+            KeyCode::Char('a') if running => return add(&dialog, Repeat::Always, dialog.scope, now),
+            _ => {}
+        }
+        self.mode = Mode::Notify(dialog);
         Action::None
     }
 
@@ -744,7 +835,7 @@ impl GuideTab {
 
     // ---------- drawing ----------
 
-    pub fn draw(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, rules: &Rules, ui: &UiOptions) {
+    pub fn draw(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, marks: &HashSet<(usize, i64)>, ui: &UiOptions) {
         self.primetime = ui.primetime;
         self.highlight_primetime = ui.highlight_primetime;
         if self.loading {
@@ -775,7 +866,7 @@ impl GuideTab {
             let [head, grid, details] =
                 Layout::vertical([Constraint::Length(3), Constraint::Percentage(62), Constraint::Min(6)]).areas(area);
             self.draw_header(f, head);
-            self.draw_grid(f, grid, favs, rules, ui);
+            self.draw_grid(f, grid, favs, marks, ui);
             self.draw_details(f, details);
 
             if let (Mode::Filter(input), true) = (&self.mode, grid.height >= 3) {
@@ -789,6 +880,9 @@ impl GuideTab {
             if let (Mode::Search(search), Some(g)) = (&mut self.mode, &self.guide) {
                 draw_search(f, area, search, g);
             }
+            if let Mode::Notify(dialog) = &self.mode {
+                draw_notify_dialog(f, area, dialog);
+            }
             return;
         }
 
@@ -800,11 +894,14 @@ impl GuideTab {
 
         self.draw_channels(f, left, ui);
         self.draw_header(f, head);
-        self.draw_programmes(f, programmes, favs, rules, ui);
+        self.draw_programmes(f, programmes, favs, marks, ui);
         self.draw_details(f, details);
 
         if let (Mode::Search(search), Some(g)) = (&mut self.mode, &self.guide) {
             draw_search(f, area, search, g);
+        }
+        if let Mode::Notify(dialog) = &self.mode {
+            draw_notify_dialog(f, area, dialog);
         }
     }
 
@@ -897,11 +994,12 @@ impl GuideTab {
         f.render_widget(Paragraph::new(Line::from(spans)).block(Block::bordered()), area);
     }
 
-    fn draw_programmes(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, rules: &Rules, ui: &UiOptions) {
+    fn draw_programmes(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, marks: &HashSet<(usize, i64)>, ui: &UiOptions) {
         let focused = self.focus == Focus::Programmes;
         let list = self.day_list();
         let now = Utc::now().timestamp();
         let inner = area.width.saturating_sub(2) as usize;
+        let channel_index = self.selected_channel_index().unwrap_or(0);
         let prime_ts = if ui.highlight_primetime {
             self.day.and_then(|d| primetime_ts(d, ui.primetime))
         } else {
@@ -941,7 +1039,7 @@ impl GuideTab {
                     } else {
                         Span::raw(" ")
                     };
-                    let notified = if rules.matches(&key, &channel.id) {
+                    let notified = if marks.contains(&(channel_index, p.start.timestamp())) {
                         Span::styled("●", Style::new().fg(parse_color(&ui.notify_color)))
                     } else {
                         Span::raw(" ")
@@ -985,7 +1083,7 @@ impl GuideTab {
     }
 
     /// The newspaper layout: one column per channel, the day's programmes listed down each column.
-    fn draw_grid(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, rules: &Rules, ui: &UiOptions) {
+    fn draw_grid(&mut self, f: &mut Frame, area: Rect, favs: &Favorites, marks: &HashSet<(usize, i64)>, ui: &UiOptions) {
         let total = self.visible.len();
         if total == 0 {
             f.render_widget(Paragraph::new(t!("No channel matches the filter.")).block(Block::bordered()), area);
@@ -1091,7 +1189,7 @@ impl GuideTab {
                         } else {
                             Span::styled(" ", style)
                         };
-                        let notified = if rules.matches(&key, &channel.id) {
+                        let notified = if marks.contains(&(ci, p.start.timestamp())) {
                             Span::styled("●", style.fg(parse_color(&ui.notify_color)))
                         } else {
                             Span::styled(" ", style)
@@ -1252,6 +1350,63 @@ fn detail_lines(channel: &GuideChannel, p: &GuideProgramme) -> Vec<Line<'static>
     }
 
     lines
+}
+
+/// The dialog for setting a notification: once or every time, this channel or all, and what to do when the
+/// programme is already running.
+fn draw_notify_dialog(f: &mut Frame, area: Rect, dialog: &NotifyDialog) {
+    let now = Utc::now().timestamp();
+    let target = &dialog.target;
+    let running = target.start <= now;
+    let key = Style::new().fg(Color::Cyan);
+    let scope = dialog.scope.label();
+
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::styled(
+            format!("{}  ({}, {})", target.title, target.channel_name, target.when),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+
+    if running {
+        let over = target.end.is_some_and(|e| e <= now);
+        lines.push(Line::styled(
+            if over { t!("This programme has already aired.") } else { t!("This programme is running now.") },
+            Style::new().fg(Color::Yellow),
+        ));
+        lines.push(Line::raw(t!("Set the notification for:")));
+        lines.push(Line::styled(t!("n  the next airing only"), key));
+        lines.push(Line::styled(t!("a  all upcoming airings"), key));
+        lines.push(Line::raw(t!("Channels: {scope}", scope = scope)));
+        lines.push(Line::styled(t!("c changes the channels (for all upcoming airings)"), Style::new().fg(Color::DarkGray)));
+        lines.push(Line::styled(t!("Esc  don't set any notification"), key));
+    } else {
+        let mode = match dialog.repeat {
+            Repeat::Once => t!("once, for this airing only"),
+            Repeat::Always => t!("every time, from this airing on"),
+        };
+        lines.push(Line::raw(t!("Notify: {mode}", mode = mode)));
+        lines.push(Line::styled(t!("r changes it"), Style::new().fg(Color::DarkGray)));
+        lines.push(Line::raw(t!("Channels: {scope}", scope = scope)));
+        lines.push(Line::styled(
+            t!("c changes the channels (only for every time)"),
+            Style::new().fg(Color::DarkGray),
+        ));
+        lines.push(Line::styled(t!("Enter sets the notification · Esc cancels"), key));
+    }
+    if let Some(notice) = &dialog.notice {
+        lines.push(Line::styled(notice.clone(), Style::new().fg(Color::Red)));
+    }
+
+    let popup = centered(area, 72.min(area.width), lines.len() as u16 + 2);
+    f.render_widget(Clear, popup);
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::bordered().title(format!(" {} ", t!("Notification"))).border_style(Style::new().fg(Color::Yellow))),
+        popup,
+    );
 }
 
 fn draw_search(f: &mut Frame, area: Rect, search: &mut Search, guide: &Guide) {

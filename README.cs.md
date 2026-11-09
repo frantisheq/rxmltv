@@ -243,10 +243,19 @@ Pořad vám může dát vědět před začátkem. Stiskněte `b` u pořadu v pro
   služeb. Nainstalujte `apprise`, zadejte adresy v Nastavení > Adresy Apprise (nebo nechte `apprise_command` použít vlastní
   konfiguraci Apprise), zapněte Oznámení: Apprise a vyzkoušejte Nastavení > Poslat zkušební oznámení.
 
-Každé oznámení má na kartě Oznámení vlastní volby: **jednou** (při prvním výskytu pořadu v programu) nebo **pokaždé**,
-když se objeví, **tato stanice** nebo **všechny stanice**, a minuty před začátkem (prázdné = výchozí). Nová oznámení
-berou výchozí hodnoty z Nastavení (Oznámení: opakování, Oznámení: stanice, Oznámit minut předem). Oznámení „jednou“ je po
-oznámení hotové (`R` ho znovu aktivuje). Pořady s oznámením mají před časem barevnou tečku (Nastavení > Barva oznámení).
+Stiskněte `b` u pořadu v programu. Pokud ještě nemá oznámení, otevře se dialog s otázkami:
+
+- **jednou** (jen toto vysílání) nebo **pokaždé** (toto vysílání a všechna další);
+- u „pokaždé“: jen **tato stanice**, nebo **všechny stanice**;
+- pokud pořad **už běží** (nebo skončil): zda nastavit oznámení pro **jen nejbližší další vysílání**, pro **všechna
+  nadcházející vysílání**, nebo **žádné**.
+
+Stisk `b` u pořadu, který oznámení má, ho odstraní. Karta Oznámení je vypisuje všechna, s minutami před začátkem (prázdné =
+výchozí), a umožňuje je měnit: `r` jednou/pokaždé, `c` tato stanice/všechny, `m` minuty, `R` znovu aktivuje dokončené.
+Výchozí volby dialogu jsou v Nastavení (Oznámení: opakování, Oznámení: stanice, Oznámit minut předem). Oznámení „jednou“
+je po oznámení hotové. Pořady s oznámením mají před časem barevnou tečku (Nastavení > Barva oznámení): oznámení „jednou“
+označuje to jedno vysílání, oznámení „pokaždé“ své vysílání a všechna další.
+
 Seznam se ukládá do `~/.rxmltv/rxmltv.notifications`, co už bylo oznámeno, do `~/.rxmltv/rxmltv.notified`.
 
 Oznámení přes Apprise fungují i při běhu rxmltv jako služby, bez přihlášeného uživatele (níže). Pokud běží terminálové

@@ -46,8 +46,9 @@ Or make the file with the terminal UI as the service user (Settings tab, then `s
    configuration files work too.
 3. Check it by hand: `apprise -vv -t "Test" -b "Hello" "tgram://BOT_TOKEN/CHAT_ID"`.
 4. Make the list in the terminal UI as the **same user and home as the service**: press `b` on a programme in the
-   Guide (or add a title on the Notifications tab), and set once/every time, this channel/all channels and the
-   minutes before the start for each notification.
+   Guide (a dialog asks once or every time, and this channel or all channels). The Notifications tab changes these
+   and the minutes before the start later; a title added there is an every-time notification for all channels from
+   now on.
 
 The service must be able to run `apprise`: a systemd service with a restricted `PATH` or a Windows service as Local Service may
 not find it; give the full path in `apprise_command` (for example `/usr/local/bin/apprise`).

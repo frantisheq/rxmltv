@@ -240,11 +240,21 @@ A programme can notify you before it starts. Press `b` on a programme in the Gui
   other services. Install `apprise`, put your URLs in Settings > Apprise URLs (or let `apprise_command` use Apprise's own
   configuration), switch on Notifications: Apprise, and try Settings > Send a test notification.
 
-Every notification has its own options on the Notifications tab: **once** (the first time the programme shows up in the
-guide) or **every time** it shows up, **this channel** or **all channels**, and the minutes before the start (empty =
-the default). New notifications take their defaults from Settings (Notify: repeat, Notify: channels, Notify minutes
-before). A "once" notification is done after it was announced (`R` arms it again). Programmes that have a notification
-show a coloured dot before the time (Settings > Notification colour). The list is kept in `~/.rxmltv/rxmltv.notifications`,
+Press `b` on a programme in the Guide. If it has no notification yet, a dialog asks:
+
+- **once** (this airing only) or **every time** (this airing and all the ones after it);
+- for "every time": **this channel** only or **all channels**;
+- if the programme is **already running** (or over): whether to set the notification for **the next airing only**, for
+  **all upcoming airings**, or **none**.
+
+Pressing `b` on a programme that has a notification removes it. The Notifications tab lists all of them, with the minutes
+before the start (empty = the default), and changes them: `r` once/every time, `c` this channel/all channels, `m` minutes,
+`R` arms a finished one again. The dialog's defaults come from Settings (Notify: repeat, Notify: channels, Notify minutes
+before). A "once" notification is done after it was announced. Programmes that have a notification show a coloured dot
+before the time (Settings > Notification colour): a "once" notification marks that one airing, an "every time"
+notification marks its airing and the ones after it.
+
+The list is kept in `~/.rxmltv/rxmltv.notifications`,
 what was announced in `~/.rxmltv/rxmltv.notified`.
 
 Apprise notifications also work when rxmltv runs as a service, with nobody logged in (below). If the terminal UI and

@@ -243,10 +243,19 @@ Relácia vám môže dať vedieť pred začiatkom. Stlačte `b` pri relácii v p
   služieb. Nainštalujte `apprise`, zadajte adresy v Nastaveniach > Adresy Apprise (alebo nechajte `apprise_command` použiť vlastnú
   konfiguráciu Apprise), zapnite Oznámenia: Apprise a vyskúšajte Nastavenia > Poslať skúšobné oznámenie.
 
-Každé oznámenie má na karte Oznámenia vlastné voľby: **raz** (pri prvom výskyte relácie v programe) alebo **zakaždým**,
-keď sa objaví, **táto stanica** alebo **všetky stanice**, a minúty pred začiatkom (prázdne = predvolené). Nové oznámenia
-preberajú predvolené hodnoty z Nastavení (Oznámenia: opakovanie, Oznámenia: stanice, Oznámiť minút vopred). Oznámenie „raz“ je po
-oznámení hotové (`R` ho znova aktivuje). Relácie s oznámením majú pred časom farebnú bodku (Nastavenia > Farba oznámení).
+Stlačte `b` pri relácii v programe. Ak ešte nemá oznámenie, otvorí sa dialóg s otázkami:
+
+- **raz** (len toto vysielanie) alebo **zakaždým** (toto vysielanie a všetky ďalšie);
+- pri „zakaždým“: len **táto stanica**, alebo **všetky stanice**;
+- ak relácia **už beží** (alebo skončila): či nastaviť oznámenie pre **len najbližšie ďalšie vysielanie**, pre **všetky
+  nasledujúce vysielania**, alebo **žiadne**.
+
+Stlačenie `b` pri relácii, ktorá oznámenie má, ho odstráni. Karta Oznámenia ich vypisuje všetky, s minútami pred začiatkom
+(prázdne = predvolené), a umožňuje ich meniť: `r` raz/zakaždým, `c` táto stanica/všetky, `m` minúty, `R` znova aktivuje
+dokončené. Predvolené voľby dialógu sú v Nastaveniach (Oznámenia: opakovanie, Oznámenia: stanice, Oznámiť minút vopred).
+Oznámenie „raz“ je po oznámení hotové. Relácie s oznámením majú pred časom farebnú bodku (Nastavenia > Farba oznámení):
+oznámenie „raz“ označuje to jedno vysielanie, oznámenie „zakaždým“ svoje vysielanie a všetky ďalšie.
+
 Zoznam sa ukladá do `~/.rxmltv/rxmltv.notifications`, čo už bolo oznámené, do `~/.rxmltv/rxmltv.notified`.
 
 Oznámenia cez Apprise fungujú aj pri behu rxmltv ako služby, bez prihláseného používateľa (nižšie). Ak beží terminálové
