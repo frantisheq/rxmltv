@@ -14,6 +14,9 @@ It stops cleanly on SIGTERM or Ctrl+C. Messages go to standard error with a time
 The settings are read once when it starts, so restart the service after changing `rxmltv.conf`. The notification
 list is read again every few seconds, so notifications you add in the terminal UI take effect at once.
 
+`rxmltv --service` reads `~/.rxmltv/rxmltv.conf` by itself (so does `--tui`); `--config <file>` reads another file, and a leading
+`~` in it is the home folder. A plain `rxmltv` run (for cron) only reads a settings file it is given with `--config`.
+
 The service uses a **user's home folder** for everything: settings in `~/.rxmltv/rxmltv.conf`, the cache in
 `~/.rxmltv/cache`, the notification list in `~/.rxmltv/rxmltv.notifications`. A service that runs as the user `rxmltv`
 with the home `/var/lib/rxmltv` keeps its files in `/var/lib/rxmltv/.rxmltv`. To manage them with the terminal UI, run it

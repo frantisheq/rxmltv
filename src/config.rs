@@ -199,7 +199,7 @@ pub fn parse(text: &str) -> Result<Options, String> {
             "concurrency" => {
                 o.concurrency = crate::parse_concurrency("concurrency", value).map_err(|m| at(number, m))?
             }
-            "output" => o.output = text_value("output")?,
+            "output" => o.output = crate::util::expand_home(&text_value("output")?).to_string_lossy().to_string(),
             "cache_dir" => o.cache_dir = text_value("cache_dir")?,
             "groups" => {
                 let list: Vec<String> = value

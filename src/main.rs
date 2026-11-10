@@ -77,7 +77,8 @@ const USAGE: &str = r##"Usage: rxmltv [options]
   --upload            Upload the output file after the update (server settings come from --config / --tui;
                       needs the curl program). Exit code 3: the guide was written but the command or upload failed
   --config <file>     Read the settings from this file first (written by --tui); options given on the
-                      command line then override it (--channels adds to the file's channels)
+                      command line then override it (--channels adds to the file's channels). A leading ~ is
+                      the home folder. With --tui or --service, ~/.rxmltv/rxmltv.conf is read without --config
   --tui               Open the terminal UI: browse the generated guide and edit the updater settings.
                       Settings are saved to rxmltv.conf, or to the --config file
   -h, --help          Show this help"##;
@@ -405,29 +406,43 @@ pub(crate) fn parse_positive(name: &str, value: &str) -> Result<u32, String> {
 }
 
 /// The file named by `--config`, or (with `--tui`) the default settings file if there is one.
+/// A path as typed on the command line: a leading `~` is the home folder (the shell does not expand it in
+/// `--config=~/x`, or in a service file).
+fn expand_path(text: &str) -> String {
+    util::expand_home(text).to_string_lossy().to_string()
+}
+
 fn find_config(args: &[String]) -> Result<Option<String>, String> {
+    find_config_in(args, &config::default_path(), std::path::Path::new("rxmltv.conf"))
+}
+
+/// The settings file to read: the one named by `--config`, or, for `--tui` and `--service`, the default file
+/// (`home_conf`, or an older `legacy` one next to where the program runs) if there is one.
+fn find_config_in(
+    args: &[String],
+    home_conf: &std::path::Path,
+    legacy: &std::path::Path,
+) -> Result<Option<String>, String> {
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--config" {
             return match args.get(i + 1) {
-                Some(path) => Ok(Some(path.clone())),
+                Some(path) => Ok(Some(expand_path(path))),
                 None => Err("--config needs a value.".to_string()),
             };
         }
         if let Some(path) = args[i].strip_prefix("--config=") {
-            return Ok(Some(path.to_string()));
+            return Ok(Some(expand_path(path)));
         }
         i += 1;
     }
 
-    if args.iter().any(|a| a == "--tui") {
-        // ~/.rxmltv/rxmltv.conf, or an older ./rxmltv.conf from before the settings moved there
-        let home = config::default_path();
-        if home.exists() {
-            return Ok(Some(home.to_string_lossy().to_string()));
+    if args.iter().any(|a| a == "--tui" || a == "--service") {
+        if home_conf.exists() {
+            return Ok(Some(home_conf.to_string_lossy().to_string()));
         }
-        if std::path::Path::new("rxmltv.conf").exists() {
-            return Ok(Some("rxmltv.conf".to_string()));
+        if legacy.exists() {
+            return Ok(Some(legacy.to_string_lossy().to_string()));
         }
     }
     Ok(None)
@@ -514,7 +529,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
                 }
             }
             "--channels-file" => {
-                let path = take_value(name, inline, args, &mut i)?;
+                let path = expand_path(&take_value(name, inline, args, &mut i)?);
                 let text = fs::read_to_string(&path).map_err(|e| format!("Cannot read {path}: {e}"))?;
                 for line in text
                     .trim_start_matches('\u{feff}')
@@ -529,7 +544,7 @@ fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
             "--concurrency" => {
                 o.concurrency = parse_concurrency(name, &take_value(name, inline, args, &mut i)?)?
             }
-            "--output" => o.output = take_value(name, inline, args, &mut i)?,
+            "--output" => o.output = expand_path(&take_value(name, inline, args, &mut i)?),
             "--cache-dir" => o.cache_dir = take_value(name, inline, args, &mut i)?,
             _ => return Err(format!("Unknown option: {name}")),
         }
@@ -1319,6 +1334,54 @@ mod tests {
         assert!(is_safe_id("ct1_HD-2"));
         assert!(!is_safe_id("../x"));
         assert!(!is_safe_id(""));
+    }
+
+    #[test]
+    fn a_tilde_in_a_path_is_the_home_folder() {
+        let Some(home) = util::home_dir() else { return };
+        let home = home.to_string_lossy().to_string();
+
+        // the settings file (--config=~/x is not expanded by the shell)
+        for given in [vec!["--config=~/rxmltv-no-such-file.conf"], vec!["--config", "~/rxmltv-no-such-file.conf"]] {
+            let error = parse_args(&args(&given)).unwrap_err();
+            assert!(error.contains(&home), "{error}");
+        }
+
+        let o = parse_args(&args(&["--output=~/epg.xml"])).unwrap().unwrap();
+        assert_eq!(std::path::Path::new(&o.output), util::home_dir().unwrap().join("epg.xml"));
+    }
+
+    #[test]
+    fn the_service_and_the_ui_read_the_default_settings_file() {
+        let dir = std::env::temp_dir().join(format!("rxmltv-test-{}-findconfig", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let home_conf = dir.join("rxmltv.conf");
+        let legacy = dir.join("legacy.conf");
+        let none = dir.join("missing.conf");
+        fs::write(&home_conf, "days = 2\n").unwrap();
+        fs::write(&legacy, "days = 3\n").unwrap();
+        let home = home_conf.to_string_lossy().to_string();
+
+        // --service and --tui find it without --config
+        assert_eq!(find_config_in(&args(&["--service"]), &home_conf, &none).unwrap(), Some(home.clone()));
+        assert_eq!(find_config_in(&args(&["--tui"]), &home_conf, &none).unwrap(), Some(home.clone()));
+        // an older file in the current folder is the fallback
+        assert_eq!(
+            find_config_in(&args(&["--service"]), &none, &legacy).unwrap(),
+            Some(legacy.to_string_lossy().to_string())
+        );
+        // an ordinary run (cron) keeps ignoring it: it only reads a file it is told to
+        assert_eq!(find_config_in(&args(&["--days", "5"]), &home_conf, &legacy).unwrap(), None);
+        assert_eq!(find_config_in(&args(&["--serve"]), &home_conf, &legacy).unwrap(), None);
+        // --config wins
+        assert_eq!(
+            find_config_in(&args(&["--service", "--config", "/x/y.conf"]), &home_conf, &legacy).unwrap(),
+            Some("/x/y.conf".to_string())
+        );
+        // nothing to read: nothing found
+        assert_eq!(find_config_in(&args(&["--service"]), &none, &none).unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -84,7 +84,7 @@ rxmltv [volby]
 | `--keep-title-numbers` | Ponechá `(3)`, `(2/6)` a římská čísla řad v názvu. Výchozí: odstraní se a zapíšou se jako `<episode-num>` |
 | `--keep-empty-channels` | Zapíše i stanice bez pořadů |
 | `--no-images` | Nezapisuje prvky `<icon>` s plakáty pořadů |
-| `--config <soubor>` | Nejdřív načte nastavení ze souboru (zapsaného přes `--tui`); volby z příkazové řádky ho přepíší, `--channels` přidá stanice k těm ze souboru |
+| `--config <soubor>` | Nejdřív načte nastavení ze souboru (zapsaného přes `--tui`); volby z příkazové řádky ho přepíší, `--channels` přidá stanice k těm ze souboru. Úvodní `~` je domovská složka (i v `--config=~/...`). `--tui` a `--service` si `~/.rxmltv/rxmltv.conf` načtou samy, pokud existuje; obyčejný běh čte jen soubor, který mu určíte |
 | `--tui` | Otevře terminálové rozhraní (viz níže) |
 | `--post-command <příkaz>` | Po úspěšné aktualizaci spustí příkaz shellu; `{file}` je výstupní soubor |
 | `--upload` | Po aktualizaci nahraje výstupní soubor (nastavení serveru se bere z `--config` / `--tui`; vyžaduje `curl`) |

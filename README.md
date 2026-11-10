@@ -83,7 +83,7 @@ rxmltv [options]
 | `--keep-title-numbers` | Keep `(3)`, `(2/6)` and roman season numbers in the title. Default: removed and written as `<episode-num>` |
 | `--keep-empty-channels` | Also write channels that have no programmes |
 | `--no-images` | Don't write programme poster `<icon>` elements |
-| `--config <file>` | Read the settings from a file first (written by `--tui`); options on the command line override it, `--channels` adds to the file's channels |
+| `--config <file>` | Read the settings from a file first (written by `--tui`); options on the command line override it, `--channels` adds to the file's channels. A leading `~` is the home folder (also in `--config=~/...`). `--tui` and `--service` read `~/.rxmltv/rxmltv.conf` by themselves when it exists; a plain run only reads a file it is told to |
 | `--tui` | Open the terminal UI (see below) |
 | `--post-command <cmd>` | Run a shell command after a successful update; `{file}` is the output file |
 | `--upload` | Upload the output file after the update (server settings come from `--config` / `--tui`; needs `curl`) |

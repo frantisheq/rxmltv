@@ -530,7 +530,9 @@ fn commit(item: Item, text: &str, o: &mut Options) -> Result<(), String> {
     match item {
         Item::Days => o.days = crate::parse_positive(t!("Days"), text)?,
         Item::Concurrency => o.concurrency = crate::parse_concurrency(t!("Parallel downloads"), text)?,
-        Item::Output => o.output = not_empty(t!("The output file name"))?,
+        Item::Output => {
+            o.output = crate::util::expand_home(&not_empty(t!("The output file name"))?).to_string_lossy().to_string()
+        }
         Item::CacheDir => o.cache_dir = not_empty(t!("The cache folder"))?,
         Item::FavoriteColor => {
             if !config::valid_color(text) {
